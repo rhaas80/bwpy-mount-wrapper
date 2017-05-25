@@ -46,22 +46,26 @@
 #define COLOR_CYAN "\e[36m"
 #define COLOR_RED  "\e[31m"
 
+//Kernel headers don't always match actual kernel version
+#define THIS_KERNEL_VERSION KERNEL_VERSION(3,0,101)
+
 #define IMAGE_DIR "/sw/bw/images/bwpy"
+#define MAINT_GROUP "bw_seas"
+#define MOUNTPOINT "/sw/bw/bwpy"
+#define IMAGE_TYPE "ext4"
+
 #define IMAGE_DEFAULT_FILENAME "bwpy.img"
 #define IMAGE_DEFAULT IMAGE_DIR "/" IMAGE_DEFAULT_FILENAME
 #define IMAGE_PREFIX "bwpy"
 #define IMAGE_SUFFIX ".img"
 #define IMAGE_VERSIONED IMAGE_DIR "/" IMAGE_PREFIX "-%s" IMAGE_SUFFIX
-#define MOUNTPOINT "/sw/bw/bwpy"
-#define IMAGE_TYPE "ext4"
-#define MAINT_GROUP "bw_seas"
 #define LOOP_CHECK_SYMBOL "loop_get_status"
 #define LOOP_NAME "loop"
 //#define LOOP_KO "/path/to/loop.ko"
 #define LOOP_KO "/opt/cray/shifter/1.0.16-1.0502.66669.3.1.gem/kmod/3.0.101-0.46.1_1.0502.8871-cray_gem_c/kernel/drivers/block/loop.ko"
 //#define LOOP_KO "" //disable loop.ko insertion/check
 #define MAX_LOOP_DEVS 256 //The kernel limit is 256
-#if LINUX_VERSION_CODE <= KERNEL_VERSION(4,6,0)
+#if THIS_KERNEL_VERSION < KERNEL_VERSION(4,6,0)
 #define MBCACHE_CHECK_SYMBOL "exit_mbcache"
 #else
 #define MBCACHE_CHECK_SYMBOL "mbcache_exit"
@@ -74,6 +78,9 @@
 #define EXT4_CHECK_SYMBOL "ext4_mount_opts"
 #define EXT4_NAME "ext4"
 #define EXT4_KO "/opt/cray/shifter/1.0.16-1.0502.66669.3.1.gem/kmod/3.0.101-0.46.1_1.0502.8871-cray_gem_c/kernel/fs/ext4/ext4.ko"
+//#define ALWAYS_LOAD
+//#define SYMBOL_CHECKS
+#define MODULE_LOADING
 
 int maint = 0;
 
@@ -182,6 +189,7 @@ int setup_module(const char* name, const char* ko_file, const char* check_symbol
     char sysmodulepath[PATH_MAX];
     struct stat st;
 
+#ifndef ALWAYS_LOAD
     snprintf(sysmodulepath,PATH_MAX,"/sys/module/%s",name);
 
     if (stat(sysmodulepath,&st) == 0 && S_ISDIR(st.st_mode)) {
@@ -204,6 +212,7 @@ int setup_module(const char* name, const char* ko_file, const char* check_symbol
     }
     fclose(f);
 
+#ifdef SYMBOL_CHECKS
     if (check_symbol != NULL) {
         if ((f = fopen("/proc/kallsyms","r")) == NULL) {
             fprintf(stderr,"Error: Cannot open /proc/kallsyms: %s!\n",strerror(errno));
@@ -214,7 +223,7 @@ int setup_module(const char* name, const char* ko_file, const char* check_symbol
             char *tok;
 		    tok = strtok(line, " \t");
 		    tok = strtok(NULL, " \t");
-		    tok = strtok(NULL, " \t");
+		    tok = strtok(NULL, " \t\n");
 
             if (strcmp(check_symbol, tok) == 0) {
                 found = 1;
@@ -224,8 +233,10 @@ int setup_module(const char* name, const char* ko_file, const char* check_symbol
 
         fclose(f);
     }
+#endif
 
     if (!found && strlen(ko_file) > 0) {
+#endif
         int fd;
         
         if ((fd = open(ko_file, O_RDONLY)) < 0) {
@@ -233,7 +244,6 @@ int setup_module(const char* name, const char* ko_file, const char* check_symbol
             return -1;
         }
 
-        struct stat st;
         if (fstat(fd, &st) < 0) {
             fprintf(stderr,"Error: Cannot stat %s: %s!\n",ko_file,strerror(errno));
             close(fd);
@@ -261,15 +271,25 @@ int setup_module(const char* name, const char* ko_file, const char* check_symbol
         close(fd);
 
         if (init_module(ko_image, ko_size, "") != 0) {
+            //errno is EEXIST if module is already loaded
+            //errno is ENOEXEC if module is built-in
+            if (errno == EEXIST || errno == ENOEXEC) {
+                free(ko_image);
+                return 0;
+            }
             fprintf(stderr,"Error: Error inserting %s: %s!\n",ko_file,strerror(errno));
+            free(ko_image);
             return -1;
         }
+        free(ko_image);
         return 1;
+#ifndef ALWAYS_LOAD
     } else if (!found && strlen(ko_file) == 0) {
         return 2;
     } else {
         return 0;
     }
+#endif
 }
 
 const char *loop_dev_num(const unsigned char device_num) {
@@ -481,7 +501,6 @@ int main(int argc, char *argv[])
     int has_version = 0;
     char user_shell[PATH_MAX];
     const char *image_name = IMAGE_DEFAULT; 
-    int loaded_loop, loaded_mbcache, loaded_jbd2, loaded_ext4;
 
     //Get current real and effective privileges
     gid_t gid = getgid();
@@ -496,6 +515,8 @@ int main(int argc, char *argv[])
         return -1;
     }
 
+#ifdef MODULE_LOADING
+    int loaded_loop, loaded_mbcache, loaded_jbd2, loaded_ext4;
     if ((loaded_loop = setup_module(LOOP_NAME,LOOP_KO,LOOP_CHECK_SYMBOL)) < 0) {
         fprintf(stderr,"Error: No loop device support!\n");
         return -1;
@@ -512,6 +533,7 @@ int main(int argc, char *argv[])
         fprintf(stderr,"Error: No ext4 support!\n");
         return -1;
     }
+#endif
 
     //Temporarily drop permissions
     if (setegid(gid)) {
