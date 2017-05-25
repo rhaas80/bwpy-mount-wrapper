@@ -72,12 +72,12 @@
 #endif
 #define MBCACHE_NAME "mbcache"
 #define MBCACHE_KO "/opt/cray/shifter/1.0.16-1.0502.66669.3.1.gem/kmod/3.0.101-0.46.1_1.0502.8871-cray_gem_c/kernel/fs/mbcache.ko"
-#define JBD2_CHECK_SYMBOL "jbd2_alloc"
-#define JBD2_NAME "jbd2"
-#define JBD2_KO "/opt/cray/shifter/1.0.16-1.0502.66669.3.1.gem/kmod/3.0.101-0.46.1_1.0502.8871-cray_gem_c/kernel/fs/jbd2/jbd2.ko"
-#define EXT4_CHECK_SYMBOL "ext4_mount_opts"
-#define EXT4_NAME "ext4"
-#define EXT4_KO "/opt/cray/shifter/1.0.16-1.0502.66669.3.1.gem/kmod/3.0.101-0.46.1_1.0502.8871-cray_gem_c/kernel/fs/ext4/ext4.ko"
+#define JBD_CHECK_SYMBOL "journal_start"
+#define JBD_NAME "jbd"
+#define JBD_KO "/opt/cray/shifter/1.0.16-1.0502.66669.3.1.gem/kmod/3.0.101-0.46.1_1.0502.8871-cray_gem_c/kernel/fs/jbd/jbd.ko"
+#define EXT3_CHECK_SYMBOL "ext3_mount"
+#define EXT3_NAME "ext3"
+#define EXT3_KO "/opt/cray/shifter/1.0.16-1.0502.66669.3.1.gem/kmod/3.0.101-0.46.1_1.0502.8871-cray_gem_c/kernel/fs/ext3/ext3.ko"
 //#define ALWAYS_LOAD
 //#define SYMBOL_CHECKS
 #define MODULE_LOADING
@@ -525,11 +525,11 @@ int main(int argc, char *argv[])
         fprintf(stderr,"Error: No mbcache support!\n");
         return -1;
     }
-    if ((loaded_jbd2 = setup_module(JBD2_NAME,JBD2_KO,JBD2_CHECK_SYMBOL)) < 0) {
+    if ((loaded_jbd2 = setup_module(JBD_NAME,JBD_KO,JBD_CHECK_SYMBOL)) < 0) {
         fprintf(stderr,"Error: No jbd2 support!\n");
         return -1;
     }
-    if ((loaded_ext4 = setup_module(EXT4_NAME,EXT4_KO,EXT4_CHECK_SYMBOL)) < 0) {
+    if ((loaded_ext4 = setup_module(EXT3_NAME,EXT3_KO,EXT3_CHECK_SYMBOL)) < 0) {
         fprintf(stderr,"Error: No ext4 support!\n");
         return -1;
     }
@@ -702,7 +702,7 @@ int main(int argc, char *argv[])
         mountflags |= MS_RDONLY;
             
     if (mount(loop_dev_file, MOUNTPOINT, IMAGE_TYPE, mountflags, "") < 0){
-        fprintf(stderr,"Error: Cannot mount image: %s!\n",strerror(errno));
+        fprintf(stderr,"Error: Cannot mount image on %s: %s!\n",loop_dev_file,strerror(errno));
         return -1;
     }
 
