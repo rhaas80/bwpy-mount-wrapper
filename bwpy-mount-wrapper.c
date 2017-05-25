@@ -39,11 +39,12 @@
 //#define LOOP_KO "/path/to/loop.ko"
 //#define LOOP_KO "/lib/modules/4.10.4-gentoo-1-desktop/video/nvidia.ko" //test
 #define LOOP_KO "" //disable loop.ko insertion/check
+#define MAX_LOOP_DEVS 256 //The kernel limit is 256
 
 int maint = 0;
 
 const char* filename_to_version(char *filename) {
-    size_t len = strlen(filename);
+    size_t len = strnlen(filename,PATH_MAX);
     if (len < strlen(IMAGE_PREFIX "-" IMAGE_SUFFIX))
         return "default";
     filename[len-strlen(IMAGE_SUFFIX)] = 0;
@@ -129,7 +130,7 @@ const char *versioned_image(const char* version_string) {
 
     strncpy(suspect_realdir,suspect_realpath,PATH_MAX);
 
-    if (strcmp(good_realdir,dirname(suspect_realdir)) == 0)
+    if (strncmp(good_realdir,dirname(suspect_realdir),PATH_MAX) == 0)
         clean_path = suspect_realpath;
     else 
         fprintf(stderr,"Error: Something fishy is going on here. %s != %s\n",dirname(suspect_realpath),good_realdir);
@@ -145,9 +146,6 @@ int setup_module(const char* name, const char* ko_file) {
     ssize_t read_size;
     void *ko_image;
 
-    if (strlen(ko_file) == 0)
-        return 0;
-
     if ((f = fopen("/proc/modules","r")) == NULL) {
         fprintf(stderr,"Error: Cannot open /proc/modules: %s!\n",strerror(errno));
         return -1;
@@ -162,6 +160,9 @@ int setup_module(const char* name, const char* ko_file) {
             break;
         }
     }
+
+    if (strlen(ko_file) == 0)
+        return 0;
 
     if (!found) {
         int fd;
@@ -240,7 +241,7 @@ int find_existing_loop(const char *image_path)
     int loop_dev;
     const char *bf;
 
-    for (loop_dev = 0; loop_dev < 256; ++loop_dev) {
+    for (loop_dev = 0; loop_dev < MAX_LOOP_DEVS; ++loop_dev) {
         bf = backing_file(loop_dev);
         if (bf != NULL && strncmp(bf,image_path,PATH_MAX) == 0)
             return loop_dev;
@@ -256,6 +257,7 @@ int setup_loop_dev(const char *image_path) {
     int loopfd = -1;
     int loop_dev;
     int err = 0;
+    const char *errmsg = "";
 
     if (realpath(image_path,real_image_path) == NULL) {
         fprintf(stderr,"Error: failed to get real path of %s: %s\n",image_path,strerror(errno));
@@ -274,20 +276,22 @@ int setup_loop_dev(const char *image_path) {
     }
 
     //Find and open an unused loop device
-    for (loop_dev = 0; loop_dev < 255; ++loop_dev) {
+    for (loop_dev = 0; loop_dev < MAX_LOOP_DEVS; ++loop_dev) {
         bf = backing_file(loop_dev);
         if (bf == NULL) {
             const char *dev_loop_path = loop_dev_num(loop_dev);
             if ((loopfd = open(dev_loop_path, O_RDWR)) < 0) {
                 if (errno == ENOENT) {
-                    int mode = 0666 | S_IFBLK;
+                    int mode = 0660 | S_IFBLK;
                     
                     if (mknod(dev_loop_path,mode,makedev(7,loop_dev)) < 0) {
+                        errmsg = "Error creating loop device: ";
                         err = errno;
                         goto error;
                     }
 
                     if ((loopfd = open(dev_loop_path, O_RDWR)) < 0) {
+                        errmsg = "Error opening loop device (2nd attempt): ";
                         err = errno;
                         goto error;
                     }
@@ -300,11 +304,13 @@ int setup_loop_dev(const char *image_path) {
                             ++loop_dev;
                             continue;
                         } else {
+                            errmsg = "Error locking loop device (2nd attempt): ";
                             err = errno;
                             goto error;
                         }
                     }
                 } else {
+                    errmsg = "Error opening loop device: ";
                     err = errno;
                     goto error;
                 }
@@ -317,6 +323,7 @@ int setup_loop_dev(const char *image_path) {
                     ++loop_dev;
                     continue;
                 } else {
+                    errmsg = "Error locking loop device: ";
                     err = errno;
                     goto error;
                 }
@@ -325,22 +332,24 @@ int setup_loop_dev(const char *image_path) {
         }
     }
 
-    if (loop_dev == 255) {
-        fprintf(stderr,"Error: out of loop devices!\n");
+    if (loop_dev == MAX_LOOP_DEVS) {
+        fprintf(stderr,"Error: Out of loop devices!\n");
         goto error_noprint;
     }
 
     if (loopfd < 0) {
-        fprintf(stderr,"Error: failed to find a loop device!\n");
+        fprintf(stderr,"Error: Failed to find a loop device!\n");
         goto error_noprint;
     }
 
     if (ioctl(loopfd, LOOP_SET_FD, fd) < 0) {
+        errmsg = "Error setting loop fd: ";
         err = errno;
         goto error;
     }
 
     if (flock(loopfd, LOCK_UN) < 0) {
+        errmsg = "Error unlocking loop device: ";
         err = errno;
         goto error;
     }
@@ -350,7 +359,7 @@ int setup_loop_dev(const char *image_path) {
     return loop_dev;
 
 error:
-    fprintf(stderr,"Error: %s\n",strerror(err));
+    fprintf(stderr,"Error: %s%s\n",errmsg,strerror(err));
 error_noprint:
     close(fd);
     if (loopfd < 0)
@@ -552,11 +561,6 @@ int main(int argc, char *argv[])
             return -1;
     }
 
-    if ((loopdev = setup_loop_dev(image_name)) < 0) {
-        fprintf(stderr,"Error setting up loop device /dev/loop%hhu!\n",loopdev);
-        return -1;
-    }
-
     //Regain permissions
     if (seteuid(suid)) {
         fprintf(stderr,"Error: Cannot regain user privileges: %s!\n",strerror(errno));
@@ -564,6 +568,11 @@ int main(int argc, char *argv[])
     }
     if (setegid(sgid)) {
         fprintf(stderr,"Error: Cannot regain group privileges: %s!\n",strerror(errno));
+        return -1;
+    }
+
+    if ((loopdev = setup_loop_dev(image_name)) < 0) {
+        fprintf(stderr,"Error setting up loop device!\n");
         return -1;
     }
 
