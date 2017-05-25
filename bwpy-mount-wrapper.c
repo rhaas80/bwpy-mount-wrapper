@@ -37,7 +37,8 @@
 #define MAINT_GROUP "colin"
 #define LOOP_NAME "loop"
 //#define LOOP_KO "/path/to/loop.ko"
-#define LOOP_KO "/lib/modules/4.10.4-gentoo-1-desktop/video/nvidia.ko"
+//#define LOOP_KO "/lib/modules/4.10.4-gentoo-1-desktop/video/nvidia.ko" //test
+#define LOOP_KO "" //disable loop.ko insertion/check
 
 int maint = 0;
 
@@ -143,6 +144,9 @@ int setup_module(const char* name, const char* ko_file) {
     size_t ko_size;
     ssize_t read_size;
     void *ko_image;
+
+    if (strlen(ko_file) == 0)
+        return 0;
 
     if ((f = fopen("/proc/modules","r")) == NULL) {
         fprintf(stderr,"Error: Cannot open /proc/modules: %s!\n",strerror(errno));
@@ -563,11 +567,13 @@ int main(int argc, char *argv[])
         return -1;
     }
 
+    //Unshare the mount namespace
     if (unshare(CLONE_NEWNS) != 0) {
         fprintf(stderr,"Error: Cannot create mount namespace: %s!\n",strerror(errno));
         return -1;
     }
 
+    //Don't share the mounting with other processes
     if (mount("none", "/", NULL, MS_REC | MS_PRIVATE, NULL) == -1) {
         fprintf(stderr,"Error: Cannot give / subtree private mount propagation: %s!\n",strerror(errno));
         return -1;
