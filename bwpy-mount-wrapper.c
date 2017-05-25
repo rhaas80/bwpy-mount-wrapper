@@ -52,7 +52,7 @@
 #define IMAGE_DIR "/sw/bw/images/bwpy"
 #define MAINT_GROUP "bw_seas"
 #define MOUNTPOINT "/sw/bw/bwpy"
-#define IMAGE_TYPE "ext4"
+#define IMAGE_TYPE "ext3"
 
 #define IMAGE_DEFAULT_FILENAME "bwpy.img"
 #define IMAGE_DEFAULT IMAGE_DIR "/" IMAGE_DEFAULT_FILENAME
