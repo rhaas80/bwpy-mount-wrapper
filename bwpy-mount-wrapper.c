@@ -1,3 +1,21 @@
+/* bwpy-environ: Mount namespace wrapper 
+ * Copyright (C) 2017 Colin MacLean, University of Illinois <cmaclean@illinois.edu>
+ *
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program.  If not, see <http://www.gnu.org/licenses/>.
+ *
+ */
+
 #define _GNU_SOURCE
 #include <dirent.h>
 #include <errno.h>
@@ -20,6 +38,7 @@
 #include <sys/types.h>
 #include <linux/limits.h>
 #include <linux/loop.h>
+#include <linux/version.h>
 
 #define init_module(mod, len, opts) syscall(__NR_init_module, mod, len, opts)
 
@@ -27,19 +46,34 @@
 #define COLOR_CYAN "\e[36m"
 #define COLOR_RED  "\e[31m"
 
-#define IMAGE_DEFAULT "/home/colin/bwpy.img"
-#define IMAGE_VERSIONED "/home/colin/bwpy-%s.img"
-#define IMAGE_DIR "/home/colin"
+#define IMAGE_DIR "/sw/bw/images/bwpy"
+#define IMAGE_DEFAULT_FILENAME "bwpy.img"
+#define IMAGE_DEFAULT IMAGE_DIR "/" IMAGE_DEFAULT_FILENAME
 #define IMAGE_PREFIX "bwpy"
 #define IMAGE_SUFFIX ".img"
+#define IMAGE_VERSIONED IMAGE_DIR "/" IMAGE_PREFIX "-%s" IMAGE_SUFFIX
 #define MOUNTPOINT "/sw/bw/bwpy"
 #define IMAGE_TYPE "ext4"
-#define MAINT_GROUP "colin"
+#define MAINT_GROUP "bw_seas"
+#define LOOP_CHECK_SYMBOL "loop_get_status"
 #define LOOP_NAME "loop"
 //#define LOOP_KO "/path/to/loop.ko"
-//#define LOOP_KO "/lib/modules/4.10.4-gentoo-1-desktop/video/nvidia.ko" //test
-#define LOOP_KO "" //disable loop.ko insertion/check
+#define LOOP_KO "/opt/cray/shifter/1.0.16-1.0502.66669.3.1.gem/kmod/3.0.101-0.46.1_1.0502.8871-cray_gem_c/kernel/drivers/block/loop.ko"
+//#define LOOP_KO "" //disable loop.ko insertion/check
 #define MAX_LOOP_DEVS 256 //The kernel limit is 256
+#if LINUX_VERSION_CODE <= KERNEL_VERSION(4,6,0)
+#define MBCACHE_CHECK_SYMBOL "exit_mbcache"
+#else
+#define MBCACHE_CHECK_SYMBOL "mbcache_exit"
+#endif
+#define MBCACHE_NAME "mbcache"
+#define MBCACHE_KO "/opt/cray/shifter/1.0.16-1.0502.66669.3.1.gem/kmod/3.0.101-0.46.1_1.0502.8871-cray_gem_c/kernel/fs/mbcache.ko"
+#define JBD2_CHECK_SYMBOL "jbd2_alloc"
+#define JBD2_NAME "jbd2"
+#define JBD2_KO "/opt/cray/shifter/1.0.16-1.0502.66669.3.1.gem/kmod/3.0.101-0.46.1_1.0502.8871-cray_gem_c/kernel/fs/jbd2/jbd2.ko"
+#define EXT4_CHECK_SYMBOL "ext4_mount_opts"
+#define EXT4_NAME "ext4"
+#define EXT4_KO "/opt/cray/shifter/1.0.16-1.0502.66669.3.1.gem/kmod/3.0.101-0.46.1_1.0502.8871-cray_gem_c/kernel/fs/ext4/ext4.ko"
 
 int maint = 0;
 
@@ -138,13 +172,21 @@ const char *versioned_image(const char* version_string) {
     return clean_path;
 }
 
-int setup_module(const char* name, const char* ko_file) {
+int setup_module(const char* name, const char* ko_file, const char* check_symbol) {
     FILE *f;
     char line[4096];
     int found = 0;
     size_t ko_size;
     ssize_t read_size;
     void *ko_image;
+    char sysmodulepath[PATH_MAX];
+    struct stat st;
+
+    snprintf(sysmodulepath,PATH_MAX,"/sys/module/%s",name);
+
+    if (stat(sysmodulepath,&st) == 0 && S_ISDIR(st.st_mode)) {
+        return 0;
+    }
 
     if ((f = fopen("/proc/modules","r")) == NULL) {
         fprintf(stderr,"Error: Cannot open /proc/modules: %s!\n",strerror(errno));
@@ -160,11 +202,30 @@ int setup_module(const char* name, const char* ko_file) {
             break;
         }
     }
+    fclose(f);
 
-    if (strlen(ko_file) == 0)
-        return 0;
+    if (check_symbol != NULL) {
+        if ((f = fopen("/proc/kallsyms","r")) == NULL) {
+            fprintf(stderr,"Error: Cannot open /proc/kallsyms: %s!\n",strerror(errno));
+            return -1;
+        }
 
-    if (!found) {
+        while (fgets(line, sizeof(line), f)) {
+            char *tok;
+		    tok = strtok(line, " \t");
+		    tok = strtok(NULL, " \t");
+		    tok = strtok(NULL, " \t");
+
+            if (strcmp(check_symbol, tok) == 0) {
+                found = 1;
+                break;
+            }
+        }
+
+        fclose(f);
+    }
+
+    if (!found && strlen(ko_file) > 0) {
         int fd;
         
         if ((fd = open(ko_file, O_RDONLY)) < 0) {
@@ -175,28 +236,40 @@ int setup_module(const char* name, const char* ko_file) {
         struct stat st;
         if (fstat(fd, &st) < 0) {
             fprintf(stderr,"Error: Cannot stat %s: %s!\n",ko_file,strerror(errno));
+            close(fd);
             return -1;
         }
 
         ko_size  = st.st_size;
-        ko_image = malloc(ko_size);
+        if ((ko_image = malloc(ko_size)) == NULL) {
+            fprintf(stderr,"Error: Failed to allocate memory for kenel module %s: %s!",ko_file,strerror(errno));
+            close(fd);
+            return -1;
+        }   
 
         if ((read_size = read(fd, ko_image, ko_size)) < ko_size) {
             if (read_size < 0)
                 fprintf(stderr,"Error: Error reading %s: %s!\n",ko_file,strerror(errno));
             else 
                 fprintf(stderr,"Error: %s smaller than expected. %zu < %zu.\n", ko_file, (size_t) read_size, ko_size);
+
+            free(ko_image);
+            close(fd);
             return -1;
         }
 
         close(fd);
-        if (init_module(ko_image, ko_size, "max_loop=256") != 0) {
+
+        if (init_module(ko_image, ko_size, "") != 0) {
             fprintf(stderr,"Error: Error inserting %s: %s!\n",ko_file,strerror(errno));
             return -1;
         }
+        return 1;
+    } else if (!found && strlen(ko_file) == 0) {
+        return 2;
+    } else {
+        return 0;
     }
-
-    return 0;
 }
 
 const char *loop_dev_num(const unsigned char device_num) {
@@ -408,6 +481,7 @@ int main(int argc, char *argv[])
     int has_version = 0;
     char user_shell[PATH_MAX];
     const char *image_name = IMAGE_DEFAULT; 
+    int loaded_loop, loaded_mbcache, loaded_jbd2, loaded_ext4;
 
     //Get current real and effective privileges
     gid_t gid = getgid();
@@ -422,8 +496,20 @@ int main(int argc, char *argv[])
         return -1;
     }
 
-    if (setup_module(LOOP_NAME,LOOP_KO) < 0) {
+    if ((loaded_loop = setup_module(LOOP_NAME,LOOP_KO,LOOP_CHECK_SYMBOL)) < 0) {
         fprintf(stderr,"Error: No loop device support!\n");
+        return -1;
+    }
+    if ((loaded_mbcache = setup_module(MBCACHE_NAME,MBCACHE_KO,MBCACHE_CHECK_SYMBOL)) < 0) {
+        fprintf(stderr,"Error: No mbcache support!\n");
+        return -1;
+    }
+    if ((loaded_jbd2 = setup_module(JBD2_NAME,JBD2_KO,JBD2_CHECK_SYMBOL)) < 0) {
+        fprintf(stderr,"Error: No jbd2 support!\n");
+        return -1;
+    }
+    if ((loaded_ext4 = setup_module(EXT4_NAME,EXT4_KO,EXT4_CHECK_SYMBOL)) < 0) {
+        fprintf(stderr,"Error: No ext4 support!\n");
         return -1;
     }
 
