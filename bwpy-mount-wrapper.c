@@ -54,7 +54,7 @@
 #define CONFIG_BW   2
 
 
-#define CONFIG_TYPE CONFIG_TEST
+#define CONFIG_TYPE CONFIG_JYC
 
 #if CONFIG_TYPE == CONFIG_TEST
 #include "config_test.h"
