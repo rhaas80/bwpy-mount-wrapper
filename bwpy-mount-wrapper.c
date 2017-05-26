@@ -49,38 +49,60 @@
 //Kernel headers don't always match actual kernel version
 #define THIS_KERNEL_VERSION KERNEL_VERSION(3,0,101)
 
+//Test system?
+//#define TEST_SETTINGS
+
+//Paths and image type settings
+#ifdef TEST_SETTINGS
+#define IMAGE_DIR "/home/colin"
+//#define MAINT_GROUP "colin" //primary group
+#define MAINT_GROUP "plugdev" //secondary group
+//#define MAINT_GROUP "games" //non-member
+#define MOUNTPOINT "/sw/bw/bwpy"
+#define IMAGE_TYPE "ext3"
+#else
 #define IMAGE_DIR "/sw/bw/images/bwpy"
 #define MAINT_GROUP "bw_seas"
 #define MOUNTPOINT "/sw/bw/bwpy"
 #define IMAGE_TYPE "ext3"
+#define MODULE_LOADING
+//#define ALWAYS_LOAD
+//#define SYMBOL_CHECKS
+#endif
 
+//Image name settings
 #define IMAGE_DEFAULT_FILENAME "bwpy.img"
 #define IMAGE_DEFAULT IMAGE_DIR "/" IMAGE_DEFAULT_FILENAME
 #define IMAGE_PREFIX "bwpy"
 #define IMAGE_SUFFIX ".img"
 #define IMAGE_VERSIONED IMAGE_DIR "/" IMAGE_PREFIX "-%s" IMAGE_SUFFIX
+
+//Kernel Module settings
+#define LOOP_KO "/opt/cray/shifter/1.0.16-1.0502.66669.3.1.gem/kmod/3.0.101-0.46.1_1.0502.8871-cray_gem_c/kernel/drivers/block/loop.ko"
+#define MBCACHE_KO "/opt/cray/shifter/1.0.16-1.0502.66669.3.1.gem/kmod/3.0.101-0.46.1_1.0502.8871-cray_gem_c/kernel/fs/mbcache.ko"
+#define JBD_KO "/opt/cray/shifter/1.0.16-1.0502.66669.3.1.gem/kmod/3.0.101-0.46.1_1.0502.8871-cray_gem_c/kernel/fs/jbd/jbd.ko"
+#define JBD2_KO "/opt/cray/shifter/1.0.16-1.0502.66669.3.1.gem/kmod/3.0.101-0.46.1_1.0502.8871-cray_gem_c/kernel/fs/jbd2/jbd2.ko"
+#define EXT3_KO "/opt/cray/shifter/1.0.16-1.0502.66669.3.1.gem/kmod/3.0.101-0.46.1_1.0502.8871-cray_gem_c/kernel/fs/ext3/ext3.ko"
+#define EXT4_KO "/opt/cray/shifter/1.0.16-1.0502.66669.3.1.gem/kmod/3.0.101-0.46.1_1.0502.8871-cray_gem_c/kernel/fs/ext4/ext4.ko"
+
+//Other definitions
 #define LOOP_CHECK_SYMBOL "loop_get_status"
 #define LOOP_NAME "loop"
-//#define LOOP_KO "/path/to/loop.ko"
-#define LOOP_KO "/opt/cray/shifter/1.0.16-1.0502.66669.3.1.gem/kmod/3.0.101-0.46.1_1.0502.8871-cray_gem_c/kernel/drivers/block/loop.ko"
-//#define LOOP_KO "" //disable loop.ko insertion/check
-#define MAX_LOOP_DEVS 256 //The kernel limit is 256
+#define MAX_LOOP_DEVS 256 //The kernel limit is 256 (still?)
 #if THIS_KERNEL_VERSION < KERNEL_VERSION(4,6,0)
 #define MBCACHE_CHECK_SYMBOL "exit_mbcache"
 #else
 #define MBCACHE_CHECK_SYMBOL "mbcache_exit"
 #endif
 #define MBCACHE_NAME "mbcache"
-#define MBCACHE_KO "/opt/cray/shifter/1.0.16-1.0502.66669.3.1.gem/kmod/3.0.101-0.46.1_1.0502.8871-cray_gem_c/kernel/fs/mbcache.ko"
 #define JBD_CHECK_SYMBOL "journal_start"
 #define JBD_NAME "jbd"
-#define JBD_KO "/opt/cray/shifter/1.0.16-1.0502.66669.3.1.gem/kmod/3.0.101-0.46.1_1.0502.8871-cray_gem_c/kernel/fs/jbd/jbd.ko"
 #define EXT3_CHECK_SYMBOL "ext3_mount"
 #define EXT3_NAME "ext3"
-#define EXT3_KO "/opt/cray/shifter/1.0.16-1.0502.66669.3.1.gem/kmod/3.0.101-0.46.1_1.0502.8871-cray_gem_c/kernel/fs/ext3/ext3.ko"
-//#define ALWAYS_LOAD
-//#define SYMBOL_CHECKS
-#define MODULE_LOADING
+#define JBD2_CHECK_SYMBOL "jbd2_alloc"
+#define JBD2_NAME "jbd2"
+#define EXT4_CHECK_SYMBOL "ext4_mount_opts"
+#define EXT4_NAME "ext4"
 
 int maint = 0;
 
@@ -152,7 +174,7 @@ int list_versions(void) {
 const char *versioned_image(const char* version_string) {
     char good_realdir[PATH_MAX]; 
     char suspect_path[PATH_MAX];
-    char suspect_realpath[PATH_MAX];
+    static char suspect_realpath[PATH_MAX];
     char suspect_realdir[PATH_MAX];
     const char* clean_path = NULL;
 
@@ -635,7 +657,7 @@ int main(int argc, char *argv[])
             return -1;
         }
 
-        if (getgrouplist(argv[1], pwinfo->pw_gid, groups, &ngroups) == -1) {
+        if (getgrouplist(pwinfo->pw_name, pwinfo->pw_gid, groups, &ngroups) == -1) {
             retry = realloc(groups,ngroups*sizeof(gid_t));
             if (retry == NULL) {
                 fprintf(stderr,"Error: Cannot allocate memory!\n");
@@ -644,7 +666,7 @@ int main(int argc, char *argv[])
             } else {
                 groups = retry;
             }
-            if (getgrouplist(argv[1], pwinfo->pw_gid, groups, &ngroups) == -1) {
+            if (getgrouplist(pwinfo->pw_name, pwinfo->pw_gid, groups, &ngroups) == -1) {
                 free(groups);
                 fprintf(stderr,"Error: Error getting user's groups!\n");
                 return -1;
