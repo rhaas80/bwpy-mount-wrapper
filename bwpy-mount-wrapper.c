@@ -49,43 +49,21 @@
 //Kernel headers don't always match actual kernel version
 #define THIS_KERNEL_VERSION KERNEL_VERSION(3,0,101)
 
-//Test system?
-//#define TEST_SETTINGS
+#define CONFIG_TEST 0
+#define CONFIG_JYC  1
+#define CONFIG_BW   2
 
-//Paths and image type settings
-#ifdef TEST_SETTINGS
-#define IMAGE_DIR "/home/colin"
-//#define MAINT_GROUP "colin" //primary group
-#define MAINT_GROUP "plugdev" //secondary group
-//#define MAINT_GROUP "games" //non-member
-#define MOUNTPOINT "/tmp/bwpy"
-#define IMAGE_TYPE "ext3"
-#else
-#define IMAGE_DIR "/sw/bw/images/bwpy"
-#define MAINT_GROUP "bw_seas"
-#define MOUNTPOINT "/sw/bw/bwpy"
-#define IMAGE_TYPE "ext3"
-#define MODULE_LOADING
-//#define ALWAYS_LOAD
-//#define SYMBOL_CHECKS
+
+#define CONFIG_TYPE CONFIG_TEST
+
+#if CONFIG_TYPE == CONFIG_TEST
+#include "config_test.h"
+#elif CONFIG_TYPE == CONFIG_JYC
+#include "config_jyc.h"
+#elif CONFIG_TYPE == CONFIG_BW
+#include "config_bw.h"
 #endif
 
-//Image name settings
-#define IMAGE_DEFAULT_FILENAME "bwpy.img"
-#define IMAGE_DEFAULT IMAGE_DIR "/" IMAGE_DEFAULT_FILENAME
-#define IMAGE_PREFIX "bwpy"
-#define IMAGE_SUFFIX ".img"
-#define IMAGE_VERSIONED IMAGE_DIR "/" IMAGE_PREFIX "-%s" IMAGE_SUFFIX
-
-//Kernel Module settings
-#define LOOP_KO "/opt/cray/shifter/1.0.16-1.0502.66669.3.1.gem/kmod/3.0.101-0.46.1_1.0502.8871-cray_gem_c/kernel/drivers/block/loop.ko"
-#define MBCACHE_KO "/opt/cray/shifter/1.0.16-1.0502.66669.3.1.gem/kmod/3.0.101-0.46.1_1.0502.8871-cray_gem_c/kernel/fs/mbcache.ko"
-#define JBD_KO "/opt/cray/shifter/1.0.16-1.0502.66669.3.1.gem/kmod/3.0.101-0.46.1_1.0502.8871-cray_gem_c/kernel/fs/jbd/jbd.ko"
-#define JBD2_KO "/opt/cray/shifter/1.0.16-1.0502.66669.3.1.gem/kmod/3.0.101-0.46.1_1.0502.8871-cray_gem_c/kernel/fs/jbd2/jbd2.ko"
-#define EXT3_KO "/opt/cray/shifter/1.0.16-1.0502.66669.3.1.gem/kmod/3.0.101-0.46.1_1.0502.8871-cray_gem_c/kernel/fs/ext3/ext3.ko"
-#define EXT4_KO "/opt/cray/shifter/1.0.16-1.0502.66669.3.1.gem/kmod/3.0.101-0.46.1_1.0502.8871-cray_gem_c/kernel/fs/ext4/ext4.ko"
-
-//Other definitions
 #define LOOP_CHECK_SYMBOL "loop_get_status"
 #define LOOP_NAME "loop"
 #define MAX_LOOP_DEVS 256 //The kernel limit is 256 (still?)
