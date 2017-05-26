@@ -58,7 +58,7 @@
 //#define MAINT_GROUP "colin" //primary group
 #define MAINT_GROUP "plugdev" //secondary group
 //#define MAINT_GROUP "games" //non-member
-#define MOUNTPOINT "/sw/bw/bwpy"
+#define MOUNTPOINT "/tmp/bwpy"
 #define IMAGE_TYPE "ext3"
 #else
 #define IMAGE_DIR "/sw/bw/images/bwpy"
@@ -105,6 +105,59 @@
 #define EXT4_NAME "ext4"
 
 int maint = 0;
+
+#ifndef strlcpy
+//Unlike strncpy, strlcpy always null terminates
+size_t strlcpy(char *dst, const char *src, size_t dstsize) {
+    size_t len = strnlen(src,dstsize);
+    if (len > dstsize-1)
+        len = dstsize-1;
+    memcpy(dst,src,len);
+    dst[len] = 0;
+    return len;
+}
+#endif
+
+int mkdir_p(const char* path, mode_t mode) {
+    const size_t len = strnlen(path,PATH_MAX);
+    char pathbuf[PATH_MAX];
+    char *p;
+
+    errno = 0;
+    
+    if (len == PATH_MAX) {
+        errno = ENAMETOOLONG;
+        return -1;
+    }
+
+    if (len == 0) {
+        errno = EINVAL;
+        return -1;
+    }
+
+    strlcpy(pathbuf,path,PATH_MAX);
+
+    if(pathbuf[len-1] == '/')
+        pathbuf[len-1] = 0;
+
+    for (p = pathbuf+1; *p; ++p) {
+        if (*p == '/') {
+            *p = 0;
+            if (mkdir(pathbuf,mode) < 0) {
+                if (errno != EEXIST)
+                    return -1; 
+            }
+            *p = '/';
+        }
+    }
+
+    if (mkdir(pathbuf,mode) < 0) {
+        if (errno != EEXIST)
+            return -1; 
+    }
+    
+    return 0;
+}
 
 const char* filename_to_version(char *filename) {
     size_t len = strnlen(filename,PATH_MAX);
@@ -191,7 +244,7 @@ const char *versioned_image(const char* version_string) {
         return NULL;
     }
 
-    strncpy(suspect_realdir,suspect_realpath,PATH_MAX);
+    strlcpy(suspect_realdir,suspect_realpath,PATH_MAX);
 
     if (strncmp(good_realdir,dirname(suspect_realdir),PATH_MAX) == 0)
         clean_path = suspect_realpath;
@@ -375,7 +428,10 @@ int setup_loop_dev(const char *image_path) {
     const char *errmsg = "";
 
     if (realpath(image_path,real_image_path) == NULL) {
-        fprintf(stderr,"Error: failed to get real path of %s: %s\n",image_path,strerror(errno));
+        if (errno == ENAMETOOLONG)
+            fprintf(stderr,"Error: failed to get real path of image: %s\n",strerror(errno));
+        else
+            fprintf(stderr,"Error: failed to get real path of %s: %s\n",image_path,strerror(errno));
         return -1;
     }
 
@@ -567,7 +623,7 @@ int main(int argc, char *argv[])
         return -1;
     }
     
-    strncpy(wrappername,basename(argv[0]),NAME_MAX);    
+    strlcpy(wrappername,basename(argv[0]),NAME_MAX);    
 
     int c;
 
@@ -594,7 +650,7 @@ int main(int argc, char *argv[])
 
             case 'v':
                 has_version = 1;
-                strncpy(version,optarg,64);
+                strlcpy(version,optarg,64);
                 break;
 
             case 'l':
@@ -630,7 +686,7 @@ int main(int argc, char *argv[])
             }
             tmp = pwinfo->pw_shell;
         }
-        strncpy(user_shell,tmp,PATH_MAX);
+        strlcpy(user_shell,tmp,PATH_MAX);
         program = user_shell;
         program_args = NULL;
     }
@@ -702,7 +758,12 @@ int main(int argc, char *argv[])
     }
 
     if ((loopdev = setup_loop_dev(image_name)) < 0) {
-        fprintf(stderr,"Error setting up loop device!\n");
+        fprintf(stderr,"Error: Error setting up loop device!\n");
+        return -1;
+    }
+    
+    if (mkdir_p(MOUNTPOINT,S_IRWXU | S_IRGRP | S_IXGRP | S_IROTH | S_IXOTH) < 0) {
+        fprintf(stderr,"Error: Cannot create mount point %s: %s!",MOUNTPOINT,strerror(errno));
         return -1;
     }
 
