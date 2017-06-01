@@ -1,7 +1,7 @@
 //Paths and image type settings
 #define IMAGE_DIR "/sw/bw/images/bwpy"
 #define MAINT_GROUP "bw_seas"
-#define MOUNTPOINT "/tmp/bwpy"
+#define MOUNTPOINT "/mnt/bwpy"
 #define IMAGE_TYPE "ext3"
 #define MODULE_LOADING
 //#define ALWAYS_LOAD
