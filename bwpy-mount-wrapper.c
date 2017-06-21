@@ -740,10 +740,12 @@ int main(int argc, char *argv[])
         return -1;
     }
     
+#ifdef CREATE_MOUNTPOINT
     if (mkdir_p(MOUNTPOINT,S_IRWXU | S_IRGRP | S_IXGRP | S_IROTH | S_IXOTH) < 0) {
         fprintf(stderr,"Error: Cannot create mount point %s: %s!",MOUNTPOINT,strerror(errno));
         return -1;
     }
+#endif
 
     //Unshare the mount namespace
     if (unshare(CLONE_NEWNS) != 0) {
