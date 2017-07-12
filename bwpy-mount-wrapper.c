@@ -263,7 +263,11 @@ int setup_module(const char* name, const char* ko_file, const char* check_symbol
             break;
         }
     }
-    fclose(f);
+
+    if (fclose(f) < 0) {
+        fprintf(stderr,"Error: Error while closing /proc/modules: %s!\n",strerror(errno));
+        return -1;
+    }
 
 #ifdef SYMBOL_CHECKS
     if (check_symbol != NULL) {
@@ -284,7 +288,10 @@ int setup_module(const char* name, const char* ko_file, const char* check_symbol
             }
         }
 
-        fclose(f);
+        if (fclose(f) < 0) {
+            fprintf(stderr,"Error: Error while closing /proc/kallsyms: %s!\n",strerror(errno));
+            return -1;
+        }
     }
 #endif
 
@@ -299,14 +306,16 @@ int setup_module(const char* name, const char* ko_file, const char* check_symbol
 
         if (fstat(fd, &st) < 0) {
             fprintf(stderr,"Error: Cannot stat %s: %s!\n",ko_file,strerror(errno));
-            close(fd);
+            if (close(fd) < 0)
+                fprintf(stderr,"Error: Error closing %s: %s!\n",ko_file,strerror(errno));
             return -1;
         }
 
         ko_size  = st.st_size;
         if ((ko_image = malloc(ko_size)) == NULL) {
             fprintf(stderr,"Error: Failed to allocate memory for kenel module %s: %s!",ko_file,strerror(errno));
-            close(fd);
+            if (close(fd) < 0) 
+                fprintf(stderr,"Error: Error closing %s: %s!\n",ko_file,strerror(errno));
             return -1;
         }   
 
@@ -317,11 +326,13 @@ int setup_module(const char* name, const char* ko_file, const char* check_symbol
                 fprintf(stderr,"Error: %s smaller than expected. %zu < %zu.\n", ko_file, (size_t) read_size, ko_size);
 
             free(ko_image);
-            close(fd);
+            if (close(fd) < 0) 
+                fprintf(stderr,"Error: Error closing %s: %s!\n",ko_file,strerror(errno));
             return -1;
         }
 
-        close(fd);
+        if (close(fd) < 0) 
+            fprintf(stderr,"Error: Error closing %s: %s!\n",ko_file,strerror(errno));
 
         if (init_module(ko_image, ko_size, "") != 0) {
             //errno is EEXIST if module is already loaded
@@ -370,7 +381,8 @@ const char *backing_file(const unsigned char device_num) {
             fprintf(stderr,"Error: Error reading %s: %s!\n",sys_backing_file,strerror(errno));
             return NULL;
         }
-        close(fd);
+        if (close(fd) < 0) 
+            fprintf(stderr,"Error: Error closing %s: %s!\n",sys_backing_file,strerror(errno));
         return NULL;
     }
 
@@ -399,11 +411,12 @@ int find_existing_loop(const char *image_path)
 int setup_loop_dev(const char *image_path) {
     const char *bf;
     char real_image_path[PATH_MAX];
-    int fd;
+    int fd = -1;
     int loopfd = -1;
     int loop_dev;
     int err = 0;
     const char *errmsg = "";
+    const char *dev_loop_path;
 
     if (realpath(image_path,real_image_path) == NULL) {
         if (errno == ENAMETOOLONG)
@@ -413,30 +426,58 @@ int setup_loop_dev(const char *image_path) {
         return -1;
     }
 
-    if ((loop_dev = find_existing_loop(real_image_path)) >= 0)
-        return loop_dev;
+retry:
 
-    if (maint) {
-        if ((fd = open(real_image_path, O_RDWR)) < 0)
-            return -1;
-    } else {
-        if ((fd = open(real_image_path, O_RDONLY)) < 0)
-            return -1;
+    if ((loop_dev = find_existing_loop(real_image_path)) >= 0) {
+        if (fd != -1 && close(fd) < 0) 
+            fprintf(stderr,"Error: Error closing %s: %s!\n",real_image_path,strerror(errno));
+        return loop_dev;
+    }
+
+    if (fd == -1) {
+        if (maint) {
+            if ((fd = open(real_image_path, O_RDWR)) < 0)
+                return -1;
+        } else {
+            if ((fd = open(real_image_path, O_RDONLY)) < 0)
+                return -1;
+        }
+        if (flock(fd,LOCK_EX) < 0) {
+            fprintf(stderr,"Error: Error locking %s: %s!\n",real_image_path,strerror(errno));
+            goto error_skipprint;
+        }
+        if ((loop_dev = find_existing_loop(real_image_path)) >= 0) {
+            // Handle race condition locking fd
+            if (flock(fd, LOCK_UN) < 0)
+                fprintf(stderr,"Error unlocking %s: %s!\n",real_image_path,strerror(errno));
+
+            if (close(fd) < 0) {
+                fprintf(stderr,"Error: Error closing %s: %s!\n",real_image_path,strerror(errno));
+                return -1;
+            }
+            return loop_dev;
+        }
     }
 
     //Find and open an unused loop device
     for (loop_dev = 0; loop_dev < MAX_LOOP_DEVS; ++loop_dev) {
         bf = backing_file(loop_dev);
         if (bf == NULL) {
-            const char *dev_loop_path = loop_dev_num(loop_dev);
+            dev_loop_path = loop_dev_num(loop_dev);
             if ((loopfd = open(dev_loop_path, O_RDWR)) < 0) {
                 if (errno == ENOENT) {
                     int mode = 0660 | S_IFBLK;
                     
                     if (mknod(dev_loop_path,mode,makedev(7,loop_dev)) < 0) {
-                        errmsg = "Error creating loop device: ";
-                        err = errno;
-                        goto error;
+                        // Let the flock code handle a race condition
+                        // with another process attempting to create 
+                        // the same loop device by simply continuing
+                        // here on an EEXIST.
+                        if (errno != EEXIST) {
+                            errmsg = "Error creating loop device: ";
+                            err = errno;
+                            goto error;
+                        }
                     }
 
                     if ((loopfd = open(dev_loop_path, O_RDWR)) < 0) {
@@ -448,12 +489,29 @@ int setup_loop_dev(const char *image_path) {
                     if (flock(loopfd,LOCK_EX | LOCK_NB) < 0) {
                         if (errno == EWOULDBLOCK) {
                             //Another wrapper is in the process of setting up
-                            //this loop device. Close loopfd and find another.
-                            close(loopfd);
-                            ++loop_dev;
-                            continue;
+                            //this loop device. Do a blocking flock until it
+                            //is done, then retry to see if this loop device
+                            //has been set up with the same image we want.
+                            if (flock(loopfd,LOCK_EX) < 0) {
+                                errmsg = "Error locking loop device (at #1): ";
+                                err = errno;
+                                goto error;
+                            }
+                            if (flock(loopfd, LOCK_UN) < 0) {
+                                errmsg = "Error unlocking loop device (at #1): ";
+                                err = errno;
+                                goto error;
+                            }
+                            if (close(loopfd) < 0) {
+                                 fprintf(stderr,"Error: Error closing %s: %s!\n",dev_loop_path,strerror(errno));
+                                 if (close(fd) < 0)
+                                    fprintf(stderr,"Error: Error closing %s: %s!\n",real_image_path,strerror(errno));
+                                 return -1;
+                            }
+                            loopfd = -1;
+                            goto retry;
                         } else {
-                            errmsg = "Error locking loop device (2nd attempt): ";
+                            errmsg = "Error locking loop device (at #2): ";
                             err = errno;
                             goto error;
                         }
@@ -467,12 +525,30 @@ int setup_loop_dev(const char *image_path) {
             if (flock(loopfd,LOCK_EX | LOCK_NB) < 0) {
                 if (errno == EWOULDBLOCK) {
                     //Another wrapper is in the process of setting up
-                    //this loop device. Close loopfd and find another.
-                    close(loopfd);
-                    ++loop_dev;
-                    continue;
+                    //this loop device. Do a blocking flock until it
+                    //is done, then retry to see if this loop device
+                    //has been set up with the same image we want.
+                    if (flock(loopfd,LOCK_EX) < 0) {
+                        errmsg = "Error locking loop device (at #3): ";
+                        err = errno;
+                        goto error;
+                    }
+                    flock(loopfd, LOCK_UN);
+                    if (flock(loopfd, LOCK_UN) < 0) {
+                        errmsg = "Error unlocking loop device (at #3): ";
+                        err = errno;
+                        goto error;
+                    }
+                    if (close(loopfd) < 0) {
+                        fprintf(stderr,"Error: Error closing %s: %s!\n",dev_loop_path,strerror(errno));
+                        if (close(fd) < 0)
+                            fprintf(stderr,"Error: Error closing %s: %s!\n",real_image_path,strerror(errno));
+                        return -1;
+                    }
+                    loopfd = -1;
+                    goto retry;
                 } else {
-                    errmsg = "Error locking loop device: ";
+                    errmsg = "Error locking loop device (at #4): ";
                     err = errno;
                     goto error;
                 }
@@ -483,12 +559,12 @@ int setup_loop_dev(const char *image_path) {
 
     if (loop_dev == MAX_LOOP_DEVS) {
         fprintf(stderr,"Error: Out of loop devices!\n");
-        goto error_noprint;
+        goto error_skipprint;
     }
 
     if (loopfd < 0) {
         fprintf(stderr,"Error: Failed to find a loop device!\n");
-        goto error_noprint;
+        goto error_skipprint;
     }
 
     if (ioctl(loopfd, LOOP_SET_FD, fd) < 0) {
@@ -503,16 +579,29 @@ int setup_loop_dev(const char *image_path) {
         goto error;
     }
 
-    close(fd);
-    close(loopfd);
+    if (flock(fd, LOCK_UN) < 0) {
+        fprintf(stderr,"Error unlocking %s: %s!\n",real_image_path,strerror(errno));
+        goto error_skipprint;
+    }
+
+    if (close(fd) < 0) {
+        fprintf(stderr,"Error: Error closing %s: %s!\n",real_image_path,strerror(errno));
+        loop_dev = -1;
+    }
+
+    if (close(loopfd) < 0) {
+        fprintf(stderr,"Error: Error closing %s: %s!\n",dev_loop_path,strerror(errno));
+        return -1;
+    }
     return loop_dev;
 
 error:
     fprintf(stderr,"Error: %s%s\n",errmsg,strerror(err));
-error_noprint:
-    close(fd);
-    if (loopfd < 0)
-        close(loopfd);
+error_skipprint:
+    if (close(fd) < 0)
+        fprintf(stderr,"Error: Error closing %s: %s!\n",real_image_path,strerror(errno));
+    if (loopfd != -1 && close(loopfd) < 0)
+        fprintf(stderr,"Error: Error closing %s: %s!\n",dev_loop_path,strerror(errno));
     return -1;
 }
 
@@ -760,21 +849,30 @@ int main(int argc, char *argv[])
     }
 
     const char* loop_dev_file = loop_dev_num(loopdev);
-    unsigned long mountflags = MS_NOSUID | MS_NODEV | MS_NOATIME;
-    if (!maint)
-        mountflags |= MS_RDONLY;
-            
-    if (mount(loop_dev_file, MOUNTPOINT, IMAGE_TYPE, mountflags, "") < 0){
-        fprintf(stderr,"Error: Cannot mount image on %s: %s!\n",loop_dev_file,strerror(errno));
-        return -1;
-    }
-
-    //Set loop device to detach automatically once last mount is unmounted
     int loopfd;
     if ((loopfd = open(loop_dev_file, O_RDWR)) < 0) {
         fprintf(stderr,"Error: Error opening loop device: %s!\n",strerror(errno));
         return -1;
     }
+
+    // Trying to mount the loop device at the same time from multiple
+    // processes causes an EINVALID. Lock the loop device to prevent
+    // this problem.
+    if (flock(loopfd,LOCK_EX) < 0) {
+        fprintf(stderr,"Error: Error locking loop device: %s!\n",strerror(errno));
+        return -1;
+    }
+
+    unsigned long mountflags = MS_NOSUID | MS_NODEV | MS_NOATIME;
+    if (!maint)
+        mountflags |= MS_RDONLY;
+            
+    if (mount(loop_dev_file, MOUNTPOINT, IMAGE_TYPE, mountflags, "") < 0){
+        fprintf(stderr,"Error: Cannot mount %s: %s!\n",loop_dev_file,strerror(errno));
+        return -1;
+    }
+
+    //Set loop device to detach automatically once last mount is unmounted
 
     struct loop_info64 loopinfo64;
     memset(&loopinfo64, 0, sizeof(loopinfo64));
@@ -782,11 +880,22 @@ int main(int argc, char *argv[])
     
     if (ioctl(loopfd, LOOP_SET_STATUS64, &loopinfo64) < 0) {
         fprintf(stderr,"Error: Error setting LO_FLAGS_AUTOCLEAR: %s!\n",strerror(errno));
-        close(loopfd);
+        if (close(loopfd) < 0)
+            fprintf(stderr,"Error: Error closing %s: %s!\n",loop_dev_file,strerror(errno));
         return -1;
     }
 
-    close(loopfd);
+    if (flock(loopfd,LOCK_UN) < 0) {
+        fprintf(stderr,"Error: Error unlocking loop device %s: %s!",loop_dev_file,strerror(errno));
+        if (close(loopfd) < 0)
+            fprintf(stderr,"Error: Error closing %s: %s!\n",loop_dev_file,strerror(errno));
+        return -1;
+    }
+
+    if (close(loopfd) < 0) {
+        fprintf(stderr,"Error: Error closing %s: %s!\n",loop_dev_file,strerror(errno));
+        return -1;
+    }
    
     drop_priv_perm(uid,gid);
 
