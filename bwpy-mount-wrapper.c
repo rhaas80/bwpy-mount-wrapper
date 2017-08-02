@@ -82,10 +82,15 @@
 #define EXT4_CHECK_SYMBOL "ext4_mount_opts"
 #define EXT4_NAME "ext4"
 
+#define MAINT_ENV "BWPY_MAINT"
+#define VERSION_ENV "BWPY_VERSION"
+
 int maint = 0;
 
 #ifndef strlcpy
-//Unlike strncpy, strlcpy always null terminates
+// Unlike strncpy, strlcpy always null terminates
+// A non-standard function, strlcpy is available
+// on BSD, but not Linux
 size_t strlcpy(char *dst, const char *src, size_t dstsize) {
     size_t len = strnlen(src,dstsize);
     if (len > dstsize-1)
@@ -626,13 +631,13 @@ void drop_priv_perm(uid_t uid, gid_t gid) {
     if (getresuid (&check_ru, &check_eu, &check_su) != 0
             || check_ru != uid || check_eu != uid || check_su != uid) {
         fprintf(stderr,"Error: Privileges were not dropped!\n");
-        abort ();
+        abort();
     }
   
     if (getresgid (&check_rg, &check_eg, &check_sg) != 0
             || check_rg != gid || check_eg != gid || check_sg != gid) {
         fprintf(stderr,"Error: Group privileges were not dropped!\n");
-        abort ();
+        abort();
     }
 }
 
@@ -641,11 +646,13 @@ int main(int argc, char *argv[])
     char wrappername[NAME_MAX];
     const char *program;
     char **program_args;
+    char* default_program_args[2];
     int loopdev;
     char version[64];
     int has_version = 0;
     char user_shell[PATH_MAX];
     const char *image_name = IMAGE_DEFAULT; 
+    const char* version_env;
 
     //Get current real and effective privileges
     gid_t gid = getgid();
@@ -738,6 +745,14 @@ int main(int argc, char *argv[])
         }
     }
 
+    if (getenv(MAINT_ENV) != NULL)
+        maint = 1;
+
+    if (!has_version && ((version_env = getenv(VERSION_ENV)) != NULL)) {
+        has_version = 1;
+        strlcpy(version,version_env,64);
+    }
+
     if (optind < argc) {
         program = argv[optind];
         program_args = &argv[optind];
@@ -755,7 +770,9 @@ int main(int argc, char *argv[])
         }
         strlcpy(user_shell,tmp,PATH_MAX);
         program = user_shell;
-        program_args = NULL;
+        default_program_args[0] = user_shell;
+        default_program_args[1] = NULL;
+        program_args = default_program_args;
     }
 
     if (maint && uid != 0) {
