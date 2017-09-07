@@ -46,6 +46,8 @@
 #define COLOR_CYAN "\e[36m"
 #define COLOR_RED  "\e[31m"
 
+#define MAX_VERSION_LENGTH 64
+
 //Kernel headers don't always match actual kernel version
 #define THIS_KERNEL_VERSION KERNEL_VERSION(3,0,101)
 
@@ -650,7 +652,7 @@ int main(int argc, char *argv[])
     char **program_args;
     char* default_program_args[2];
     int loopdev;
-    char version[64];
+    char version[MAX_VERSION_LENGTH];
     int has_version = 0;
     char user_shell[PATH_MAX];
     const char *image_name = IMAGE_DEFAULT; 
@@ -726,7 +728,7 @@ int main(int argc, char *argv[])
 
             case 'v':
                 has_version = 1;
-                strlcpy(version,optarg,64);
+                strlcpy(version,optarg,MAX_VERSION_LENGTH);
                 break;
 
             case 'l':
@@ -752,7 +754,14 @@ int main(int argc, char *argv[])
 
     if (!has_version && ((version_env = getenv(VERSION_ENV)) != NULL)) {
         has_version = 1;
-        strlcpy(version,version_env,64);
+        strlcpy(version,version_env,MAX_VERSION_LENGTH);
+    }
+
+    for (char *c = version + 1; c < version + MAX_VERSION_LENGTH && *c != '\0'; ++c) {
+        if (*c == '.' && *(c-1) == '.') {
+            fprintf(stderr,"Error: \"..\" not permitted in version string!\n");
+            return -1;
+        }
     }
 
     if (optind < argc) {
