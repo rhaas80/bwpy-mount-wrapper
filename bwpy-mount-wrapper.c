@@ -759,7 +759,14 @@ int main(int argc, char *argv[])
 
     for (char *c = version + 1; c < version + MAX_VERSION_LENGTH && *c != '\0'; ++c) {
         if (*c == '.' && *(c-1) == '.' || *c == '/') {
-            fprintf(stderr,"Error: \"..\" and \"/\" not permitted in version string!\n");
+            fprintf(stderr,"Error: \"..\" not permitted in version string!\n");
+            return -1;
+        }
+    }
+
+    for (char *c = version; c < version + MAX_VERSION_LENGTH && *c != '\0'; ++c) {
+        if ( *c == '/') {
+            fprintf(stderr,"Error: \"/\" not permitted in version string!\n");
             return -1;
         }
     }
