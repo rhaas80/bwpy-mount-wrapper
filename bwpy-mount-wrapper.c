@@ -225,6 +225,15 @@ const char *versioned_image(const char* version_string) {
     
     snprintf(suspect_path,PATH_MAX,IMAGE_VERSIONED,version_string);
 
+    if (strstr(version_string,"..")) {
+        fprintf(stderr,"Error: \"..\" not permitted in version string!\n");
+        return NULL;
+    }
+
+    if (strstr(version_string,"/")) {
+        fprintf(stderr,"Error: \"/\" not permitted in version string!\n");
+        return NULL;
+    }
     
     if (realpath(suspect_path, suspect_realpath) == NULL) {
         fprintf(stderr,"Error: failed to get real path of requested image %s: %s\n",suspect_path,strerror(errno));
@@ -462,7 +471,7 @@ retry:
 
             if (close(fd) < 0) {
                 fprintf(stderr,"Error: Error closing %s: %s!\n",real_image_path,strerror(errno));
-                return -1;
+                goto error_noclose;
             }
             return loop_dev;
         }
@@ -515,7 +524,7 @@ retry:
                                  fprintf(stderr,"Error: Error closing %s: %s!\n",dev_loop_path,strerror(errno));
                                  if (close(fd) < 0)
                                     fprintf(stderr,"Error: Error closing %s: %s!\n",real_image_path,strerror(errno));
-                                 return -1;
+                                 goto error_noclose;
                             }
                             loopfd = -1;
                             goto retry;
@@ -552,7 +561,7 @@ retry:
                         fprintf(stderr,"Error: Error closing %s: %s!\n",dev_loop_path,strerror(errno));
                         if (close(fd) < 0)
                             fprintf(stderr,"Error: Error closing %s: %s!\n",real_image_path,strerror(errno));
-                        return -1;
+                        goto error_noclose;
                     }
                     loopfd = -1;
                     goto retry;
@@ -595,12 +604,12 @@ retry:
 
     if (close(fd) < 0) {
         fprintf(stderr,"Error: Error closing %s: %s!\n",real_image_path,strerror(errno));
-        loop_dev = -1;
+        goto error_nofd;
     }
 
     if (close(loopfd) < 0) {
         fprintf(stderr,"Error: Error closing %s: %s!\n",dev_loop_path,strerror(errno));
-        return -1;
+        goto error_noclose;
     }
     return loop_dev;
 
@@ -609,8 +618,10 @@ error:
 error_skipprint:
     if (close(fd) < 0)
         fprintf(stderr,"Error: Error closing %s: %s!\n",real_image_path,strerror(errno));
+error_nofd:
     if (loopfd != -1 && close(loopfd) < 0)
         fprintf(stderr,"Error: Error closing %s: %s!\n",dev_loop_path,strerror(errno));
+error_noclose:
     return -1;
 }
 
@@ -650,13 +661,13 @@ int main(int argc, char *argv[])
     char wrappername[NAME_MAX];
     const char *program;
     char **program_args;
-    char* default_program_args[2];
+    char *default_program_args[2];
     int loopdev;
     char version[MAX_VERSION_LENGTH];
     int has_version = 0;
     char user_shell[PATH_MAX];
     const char *image_name = IMAGE_DEFAULT; 
-    const char* version_env;
+    const char *version_env;
 
     //Get current real and effective privileges
     gid_t gid = getgid();
@@ -672,7 +683,7 @@ int main(int argc, char *argv[])
     }
 
 #ifdef MODULE_LOADING
-    int loaded_loop, loaded_mbcache, loaded_jbd2, loaded_ext4;
+    int loaded_loop, loaded_mbcache, loaded_jbd, loaded_ext3;
     if ((loaded_loop = setup_module(LOOP_NAME,LOOP_KO,LOOP_CHECK_SYMBOL)) < 0) {
         fprintf(stderr,"Error: No loop device support!\n");
         return -1;
@@ -681,12 +692,12 @@ int main(int argc, char *argv[])
         fprintf(stderr,"Error: No mbcache support!\n");
         return -1;
     }
-    if ((loaded_jbd2 = setup_module(JBD_NAME,JBD_KO,JBD_CHECK_SYMBOL)) < 0) {
-        fprintf(stderr,"Error: No jbd2 support!\n");
+    if ((loaded_jbd = setup_module(JBD_NAME,JBD_KO,JBD_CHECK_SYMBOL)) < 0) {
+        fprintf(stderr,"Error: No jbd support!\n");
         return -1;
     }
-    if ((loaded_ext4 = setup_module(EXT3_NAME,EXT3_KO,EXT3_CHECK_SYMBOL)) < 0) {
-        fprintf(stderr,"Error: No ext4 support!\n");
+    if ((loaded_ext3 = setup_module(EXT3_NAME,EXT3_KO,EXT3_CHECK_SYMBOL)) < 0) {
+        fprintf(stderr,"Error: No ext3 support!\n");
         return -1;
     }
 #endif
@@ -757,18 +768,9 @@ int main(int argc, char *argv[])
         strlcpy(version,version_env,MAX_VERSION_LENGTH);
     }
 
-    for (char *c = version + 1; c < version + MAX_VERSION_LENGTH && *c != '\0'; ++c) {
-        if (*c == '.' && *(c-1) == '.' || *c == '/') {
-            fprintf(stderr,"Error: \"..\" not permitted in version string!\n");
-            return -1;
-        }
-    }
-
-    for (char *c = version; c < version + MAX_VERSION_LENGTH && *c != '\0'; ++c) {
-        if ( *c == '/') {
-            fprintf(stderr,"Error: \"/\" not permitted in version string!\n");
-            return -1;
-        }
+    if (!maint && strstr(version,"maint")) {
+        fprintf(stderr,"Error: Maintenance image versions must be mounted in maintenance mode!");
+	return -1;
     }
 
     if (optind < argc) {
