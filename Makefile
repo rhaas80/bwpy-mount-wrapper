@@ -1,5 +1,5 @@
 .PHONY: default
-default: bw ;
+default: bwpy-environ ;
 
 bwpy-environ:
 	$(CC) -O3 bwpy-mount-wrapper.c -o bwpy-environ
