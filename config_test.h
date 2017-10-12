@@ -20,3 +20,4 @@
 #define JBD2_KO ""
 #define EXT3_KO ""
 #define EXT4_KO ""
+#define SQUASHFS_KO ""

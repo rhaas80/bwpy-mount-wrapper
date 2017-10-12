@@ -85,6 +85,8 @@
 #define JBD2_NAME "jbd2"
 #define EXT4_CHECK_SYMBOL "ext4_mount_opts"
 #define EXT4_NAME "ext4"
+#define SQUASHFS_CHECK_SYMBOL "squashfs_mount"
+#define SQUASHFS_NAME "squashfs"
 
 #define MAINT_ENV "BWPY_MAINT"
 #define VERSION_ENV "BWPY_VERSION"
@@ -274,7 +276,7 @@ int setup_module(const char* name, const char* ko_file, const char* check_symbol
 
     while (fgets(line, sizeof(line), f)) {
         char *tok;
-		tok = strtok(line, " \t");
+        tok = strtok(line, " \t");
 
         if (strcmp(name, tok) == 0) {
             found = 1;
@@ -296,9 +298,9 @@ int setup_module(const char* name, const char* ko_file, const char* check_symbol
 
         while (fgets(line, sizeof(line), f)) {
             char *tok;
-		    tok = strtok(line, " \t");
-		    tok = strtok(NULL, " \t");
-		    tok = strtok(NULL, " \t\n");
+            tok = strtok(line, " \t");
+            tok = strtok(NULL, " \t");
+            tok = strtok(NULL, " \t\n");
 
             if (strcmp(check_symbol, tok) == 0) {
                 found = 1;
@@ -656,6 +658,63 @@ void drop_priv_perm(uid_t uid, gid_t gid) {
     }
 }
 
+int do_mount(int maint, const int loopfd, const char* loop_dev_file, const char* image_name)
+{
+    // Trying to mount the loop device at the same time from multiple
+    // processes causes an EINVALID. Lock the loop device to prevent
+    // this problem.
+    if (flock(loopfd,LOCK_EX) < 0) {
+        fprintf(stderr,"Error: Error locking loop device: %s!\n",strerror(errno));
+        return -1;
+    }
+
+    unsigned long mountflags = MS_NOSUID | MS_NODEV | MS_NOATIME;
+    // squashfs is always read-only, so only attempt to mount in normal mode
+    if (!maint) {
+        mountflags |= MS_RDONLY;
+        
+#ifdef MODULE_LOADING
+        if (setup_module(SQUASHFS_NAME,SQUASHFS_KO,SQUASHFS_CHECK_SYMBOL) < 0) {
+            fprintf(stderr,"Error: No squashfs support!\n");
+            return -1;
+        }
+#endif
+
+        if (mount(loop_dev_file, MOUNTPOINT, "squashfs", mountflags, "") == 0) {
+            return 0;
+        }
+
+        if (errno != EINVAL) {
+            fprintf(stderr,"Error: Cannot mount squashfs image on %s (%s): %s!\n",loop_dev_file,image_name,strerror(errno));
+            return -1;
+        }
+    }
+
+#ifdef MODULE_LOADING
+    if (setup_module(MBCACHE_NAME,MBCACHE_KO,MBCACHE_CHECK_SYMBOL) < 0) {
+        fprintf(stderr,"Error: No mbcache support!\n");
+        return -1;
+    }
+
+    if (setup_module(JBD_NAME,JBD_KO,JBD_CHECK_SYMBOL) < 0) {
+        fprintf(stderr,"Error: No jbd support!\n");
+        return -1;
+    }
+
+    if (setup_module(EXT3_NAME,EXT3_KO,EXT3_CHECK_SYMBOL) < 0) {
+        fprintf(stderr,"Error: No ext3 support!\n");
+        return -1;
+    }
+#endif
+
+    if (mount(loop_dev_file, MOUNTPOINT, "ext3", mountflags, "") < 0){
+        fprintf(stderr,"Error: Cannot mount ext3 image on %s (%s): %s!\n",loop_dev_file,image_name,strerror(errno));
+        return -1;
+    }
+
+    return 0;
+}
+
 int main(int argc, char *argv[])
 {
     char wrappername[NAME_MAX];
@@ -683,21 +742,8 @@ int main(int argc, char *argv[])
     }
 
 #ifdef MODULE_LOADING
-    int loaded_loop, loaded_mbcache, loaded_jbd, loaded_ext3;
-    if ((loaded_loop = setup_module(LOOP_NAME,LOOP_KO,LOOP_CHECK_SYMBOL)) < 0) {
+    if (setup_module(LOOP_NAME,LOOP_KO,LOOP_CHECK_SYMBOL) < 0) {
         fprintf(stderr,"Error: No loop device support!\n");
-        return -1;
-    }
-    if ((loaded_mbcache = setup_module(MBCACHE_NAME,MBCACHE_KO,MBCACHE_CHECK_SYMBOL)) < 0) {
-        fprintf(stderr,"Error: No mbcache support!\n");
-        return -1;
-    }
-    if ((loaded_jbd = setup_module(JBD_NAME,JBD_KO,JBD_CHECK_SYMBOL)) < 0) {
-        fprintf(stderr,"Error: No jbd support!\n");
-        return -1;
-    }
-    if ((loaded_ext3 = setup_module(EXT3_NAME,EXT3_KO,EXT3_CHECK_SYMBOL)) < 0) {
-        fprintf(stderr,"Error: No ext3 support!\n");
         return -1;
     }
 #endif
@@ -770,7 +816,7 @@ int main(int argc, char *argv[])
 
     if (!maint && strstr(version,"maint")) {
         fprintf(stderr,"Error: Maintenance image versions must be mounted in maintenance mode!");
-	return -1;
+        return -1;
     }
 
     if (optind < argc) {
@@ -892,20 +938,7 @@ int main(int argc, char *argv[])
         return -1;
     }
 
-    // Trying to mount the loop device at the same time from multiple
-    // processes causes an EINVALID. Lock the loop device to prevent
-    // this problem.
-    if (flock(loopfd,LOCK_EX) < 0) {
-        fprintf(stderr,"Error: Error locking loop device: %s!\n",strerror(errno));
-        return -1;
-    }
-
-    unsigned long mountflags = MS_NOSUID | MS_NODEV | MS_NOATIME;
-    if (!maint)
-        mountflags |= MS_RDONLY;
-            
-    if (mount(loop_dev_file, MOUNTPOINT, IMAGE_TYPE, mountflags, "") < 0){
-        fprintf(stderr,"Error: Cannot mount %s: %s!\n",loop_dev_file,strerror(errno));
+    if (do_mount(maint, loopfd, loop_dev_file, image_name) < 0) {
         return -1;
     }
 
@@ -942,3 +975,4 @@ int main(int argc, char *argv[])
     }
     return -2;
 }
+// vim: tabstop=4:shiftwidth=4:expandtab
