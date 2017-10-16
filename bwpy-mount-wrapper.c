@@ -745,8 +745,17 @@ int setup_loop_and_mount(const char* image_name) {
     // this problem.
     if (flock(loopfd,LOCK_EX) < 0) {
         fprintf(stderr,"Error: Error locking loop device: %s!\n",strerror(errno));
-        ret=-1;
-        goto error_disloop;
+        return -1;
+    }
+
+    //Set loop device to detach automatically once last mount is unmounted
+    struct loop_info64 loopinfo64;
+    memset(&loopinfo64, 0, sizeof(loopinfo64));
+    loopinfo64.lo_flags = LO_FLAGS_AUTOCLEAR;
+    
+    if (ioctl(loopfd, LOOP_SET_STATUS64, &loopinfo64) < 0) {
+        fprintf(stderr,"Error: Error setting LO_FLAGS_AUTOCLEAR: %s!\n",strerror(errno));
+        return -1;
     }
 
 
@@ -755,17 +764,7 @@ int setup_loop_and_mount(const char* image_name) {
         goto error_disloop;
     }
 
-    //Set loop device to detach automatically once last mount is unmounted
 
-    struct loop_info64 loopinfo64;
-    memset(&loopinfo64, 0, sizeof(loopinfo64));
-    loopinfo64.lo_flags = LO_FLAGS_AUTOCLEAR;
-    
-    if (ioctl(loopfd, LOOP_SET_STATUS64, &loopinfo64) < 0) {
-        fprintf(stderr,"Error: Error setting LO_FLAGS_AUTOCLEAR: %s!\n",strerror(errno));
-        ret=-1;
-        goto error_disloop;
-    }
 
 error_disloop:
     if (ret != 0) {
