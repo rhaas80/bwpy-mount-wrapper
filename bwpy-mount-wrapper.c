@@ -660,14 +660,6 @@ void drop_priv_perm(uid_t uid, gid_t gid) {
 
 int do_mount(int maint, const int loopfd, const char* loop_dev_file, const char* image_name)
 {
-    // Trying to mount the loop device at the same time from multiple
-    // processes causes an EINVALID. Lock the loop device to prevent
-    // this problem.
-    if (flock(loopfd,LOCK_EX) < 0) {
-        fprintf(stderr,"Error: Error locking loop device: %s!\n",strerror(errno));
-        return -1;
-    }
-
     unsigned long mountflags = MS_NOSUID | MS_NODEV | MS_NOATIME;
     // squashfs is always read-only, so only attempt to mount in normal mode
     if (!maint) {
@@ -715,13 +707,96 @@ int do_mount(int maint, const int loopfd, const char* loop_dev_file, const char*
     return 0;
 }
 
+int setup_loop_and_mount(const char* image_name) {
+    int loopdev;
+    int loopfd;
+    int ret=0;
+    const char* loop_dev_file;
+    
+#ifdef CREATE_MOUNTPOINT
+    if (mkdir_p(MOUNTPOINT,S_IRWXU | S_IRGRP | S_IXGRP | S_IROTH | S_IXOTH) < 0) {
+        fprintf(stderr,"Error: Cannot create mount point %s: %s!",MOUNTPOINT,strerror(errno));
+        return -1;
+    }
+#endif
+
+    //Unshare the mount namespace
+    if (unshare(CLONE_NEWNS) != 0) {
+        fprintf(stderr,"Error: Cannot create mount namespace: %s!\n",strerror(errno));
+        return -1;
+    }
+
+    //Don't share the mounting with other processes
+    if (mount("none", "/", NULL, MS_REC | MS_PRIVATE, NULL) == -1) {
+        fprintf(stderr,"Error: Cannot give / subtree private mount propagation: %s!\n",strerror(errno));
+        return -1;
+    }
+
+    if ((loopdev = setup_loop_dev(image_name)) < 0) {
+        fprintf(stderr,"Error: Error setting up loop device!\n");
+        return -1;
+    }
+
+    loop_dev_file = loop_dev_num(loopdev);
+    if ((loopfd = open(loop_dev_file, O_RDWR)) < 0) {
+        fprintf(stderr,"Error: Error opening loop device: %s!\n",strerror(errno));
+        return -1;
+    }
+
+    // Trying to mount the loop device at the same time from multiple
+    // processes causes an EINVALID. Lock the loop device to prevent
+    // this problem.
+    if (flock(loopfd,LOCK_EX) < 0) {
+        fprintf(stderr,"Error: Error locking loop device: %s!\n",strerror(errno));
+        ret=-1;
+        goto error_disloop;
+    }
+
+
+    if (do_mount(maint, loopfd, loop_dev_file, image_name) < 0) {
+        ret=-1;
+        goto error_disloop;
+    }
+
+    //Set loop device to detach automatically once last mount is unmounted
+
+    struct loop_info64 loopinfo64;
+    memset(&loopinfo64, 0, sizeof(loopinfo64));
+    loopinfo64.lo_flags = LO_FLAGS_AUTOCLEAR;
+    
+    if (ioctl(loopfd, LOOP_SET_STATUS64, &loopinfo64) < 0) {
+        fprintf(stderr,"Error: Error setting LO_FLAGS_AUTOCLEAR: %s!\n",strerror(errno));
+        ret=-1;
+        goto error_disloop;
+    }
+
+error_disloop:
+    if (ret != 0) {
+        // If an error has been encountered, LO_FLAGS_AUTOCLEAR will not work.
+        // Dissassociate the image manually.
+        if (ioctl(loopfd,LOOP_CLR_FD) < 0) {
+            fprintf(stderr,"Error: Error disassociating image from loop device!");
+        }
+    }
+
+    if (flock(loopfd,LOCK_UN) < 0) {
+        fprintf(stderr,"Error: Error unlocking loop device %s: %s!",loop_dev_file,strerror(errno));
+        ret=-1;
+    }
+
+    if (close(loopfd) < 0) {
+        fprintf(stderr,"Error: Error closing %s: %s!\n",loop_dev_file,strerror(errno));
+        ret=-1;
+    }
+    return ret;
+}
+
 int main(int argc, char *argv[])
 {
     char wrappername[NAME_MAX];
     const char *program;
     char **program_args;
     char *default_program_args[2];
-    int loopdev;
     char version[MAX_VERSION_LENGTH];
     int has_version = 0;
     char user_shell[PATH_MAX];
@@ -907,65 +982,7 @@ int main(int argc, char *argv[])
         return -1;
     }
 
-    if ((loopdev = setup_loop_dev(image_name)) < 0) {
-        fprintf(stderr,"Error: Error setting up loop device!\n");
-        return -1;
-    }
-    
-#ifdef CREATE_MOUNTPOINT
-    if (mkdir_p(MOUNTPOINT,S_IRWXU | S_IRGRP | S_IXGRP | S_IROTH | S_IXOTH) < 0) {
-        fprintf(stderr,"Error: Cannot create mount point %s: %s!",MOUNTPOINT,strerror(errno));
-        return -1;
-    }
-#endif
-
-    //Unshare the mount namespace
-    if (unshare(CLONE_NEWNS) != 0) {
-        fprintf(stderr,"Error: Cannot create mount namespace: %s!\n",strerror(errno));
-        return -1;
-    }
-
-    //Don't share the mounting with other processes
-    if (mount("none", "/", NULL, MS_REC | MS_PRIVATE, NULL) == -1) {
-        fprintf(stderr,"Error: Cannot give / subtree private mount propagation: %s!\n",strerror(errno));
-        return -1;
-    }
-
-    const char* loop_dev_file = loop_dev_num(loopdev);
-    int loopfd;
-    if ((loopfd = open(loop_dev_file, O_RDWR)) < 0) {
-        fprintf(stderr,"Error: Error opening loop device: %s!\n",strerror(errno));
-        return -1;
-    }
-
-    if (do_mount(maint, loopfd, loop_dev_file, image_name) < 0) {
-        return -1;
-    }
-
-    //Set loop device to detach automatically once last mount is unmounted
-
-    struct loop_info64 loopinfo64;
-    memset(&loopinfo64, 0, sizeof(loopinfo64));
-    loopinfo64.lo_flags = LO_FLAGS_AUTOCLEAR;
-    
-    if (ioctl(loopfd, LOOP_SET_STATUS64, &loopinfo64) < 0) {
-        fprintf(stderr,"Error: Error setting LO_FLAGS_AUTOCLEAR: %s!\n",strerror(errno));
-        if (close(loopfd) < 0)
-            fprintf(stderr,"Error: Error closing %s: %s!\n",loop_dev_file,strerror(errno));
-        return -1;
-    }
-
-    if (flock(loopfd,LOCK_UN) < 0) {
-        fprintf(stderr,"Error: Error unlocking loop device %s: %s!",loop_dev_file,strerror(errno));
-        if (close(loopfd) < 0)
-            fprintf(stderr,"Error: Error closing %s: %s!\n",loop_dev_file,strerror(errno));
-        return -1;
-    }
-
-    if (close(loopfd) < 0) {
-        fprintf(stderr,"Error: Error closing %s: %s!\n",loop_dev_file,strerror(errno));
-        return -1;
-    }
+    setup_loop_and_mount(image_name);
    
     drop_priv_perm(uid,gid);
 
