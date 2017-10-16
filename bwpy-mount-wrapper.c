@@ -982,7 +982,9 @@ int main(int argc, char *argv[])
         return -1;
     }
 
-    setup_loop_and_mount(image_name);
+    if (setup_loop_and_mount(image_name) < 0) {
+        return -1;
+    }
    
     drop_priv_perm(uid,gid);
 
