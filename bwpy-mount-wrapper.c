@@ -71,6 +71,7 @@
 #define LOOP_CHECK_SYMBOL "loop_get_status"
 #define LOOP_NAME "loop"
 #define MAX_LOOP_DEVS 256 //The kernel limit is 256 (still?)
+#define LOCKFILE "/var/lock/bwpy-environ.lock"
 #if THIS_KERNEL_VERSION < KERNEL_VERSION(4,6,0)
 #define MBCACHE_CHECK_SYMBOL "exit_mbcache"
 #else
@@ -661,6 +662,20 @@ void drop_priv_perm(uid_t uid, gid_t gid) {
 int do_mount(int maint, const int loopfd, const char* loop_dev_file, const char* image_name)
 {
     unsigned long mountflags = MS_NOSUID | MS_NODEV | MS_NOATIME;
+    int lockfd;
+    int ret = 0;
+
+    if ((lockfd = open(LOCKFILE, O_RDONLY | O_CREAT, 0644)) < 0) {
+        fprintf(stderr,"Error: Cannot create lock file (" LOCKFILE "!\n");
+        return -1;
+    }
+
+    if (flock(lockfd,LOCK_EX) < 0) {
+        fprintf(stderr,"Error: Error locking " LOCKFILE "!\n");
+        ret=-1;
+        goto out;
+    }
+
     // squashfs is always read-only, so only attempt to mount in normal mode
     if (!maint) {
         mountflags |= MS_RDONLY;
@@ -668,40 +683,51 @@ int do_mount(int maint, const int loopfd, const char* loop_dev_file, const char*
 #ifdef MODULE_LOADING
         if (setup_module(SQUASHFS_NAME,SQUASHFS_KO,SQUASHFS_CHECK_SYMBOL) < 0) {
             fprintf(stderr,"Error: No squashfs support!\n");
-            return -1;
+            ret=-1;
+            goto out;
         }
 #endif
 
         // Ignore errors when attempting to mount squashfs. We fall back
         // to trying ext3, and fatal errors will be handled there.
         if (mount(loop_dev_file, MOUNTPOINT, "squashfs", mountflags, "") == 0) {
-            return 0;
+            goto out;
         }
     }
 
 #ifdef MODULE_LOADING
     if (setup_module(MBCACHE_NAME,MBCACHE_KO,MBCACHE_CHECK_SYMBOL) < 0) {
         fprintf(stderr,"Error: No mbcache support!\n");
-        return -1;
+        ret=-1;
+        goto out;
     }
 
     if (setup_module(JBD_NAME,JBD_KO,JBD_CHECK_SYMBOL) < 0) {
         fprintf(stderr,"Error: No jbd support!\n");
-        return -1;
+        ret=-1;
+        goto out;
     }
 
     if (setup_module(EXT3_NAME,EXT3_KO,EXT3_CHECK_SYMBOL) < 0) {
         fprintf(stderr,"Error: No ext3 support!\n");
-        return -1;
+        ret=-1;
+        goto out;
     }
 #endif
 
     if (mount(loop_dev_file, MOUNTPOINT, "ext3", mountflags, "") < 0){
         fprintf(stderr,"Error: Cannot mount ext3 image on %s (%s): %s!\n",loop_dev_file,image_name,strerror(errno));
+        ret=-1;
+        goto out;
+    }
+
+out:
+    if (close(lockfd) < 0) {
+        fprintf(stderr,"Error closing " LOCKFILE "!\n");
         return -1;
     }
 
-    return 0;
+    return ret;
 }
 
 int setup_loop_and_mount(const char* image_name) {
