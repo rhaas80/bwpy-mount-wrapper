@@ -674,7 +674,9 @@ int do_mount(int maint, const int loopfd, const char* loop_dev_file, const char*
 
         // Ignore errors when attempting to mount squashfs. We fall back
         // to trying ext3, and fatal errors will be handled there.
-        mount(loop_dev_file, MOUNTPOINT, "squashfs", mountflags, "");
+        if (mount(loop_dev_file, MOUNTPOINT, "squashfs", mountflags, "") == 0) {
+            return 0;
+        }
     }
 
 #ifdef MODULE_LOADING
