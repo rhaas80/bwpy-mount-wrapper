@@ -672,14 +672,9 @@ int do_mount(int maint, const int loopfd, const char* loop_dev_file, const char*
         }
 #endif
 
-        if (mount(loop_dev_file, MOUNTPOINT, "squashfs", mountflags, "") == 0) {
-            return 0;
-        }
-
-        if (errno != EINVAL) {
-            fprintf(stderr,"Error: Cannot mount squashfs image on %s (%s): %s!\n",loop_dev_file,image_name,strerror(errno));
-            return -1;
-        }
+        // Ignore errors when attempting to mount squashfs. We fall back
+        // to trying ext3, and fatal errors will be handled there.
+        mount(loop_dev_file, MOUNTPOINT, "squashfs", mountflags, "");
     }
 
 #ifdef MODULE_LOADING
