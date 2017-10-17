@@ -14,10 +14,3 @@
 #define IMAGE_VERSIONED IMAGE_DIR "/" IMAGE_PREFIX "-%s" IMAGE_SUFFIX
 
 //Kernel Module settings
-#define LOOP_KO ""
-#define MBCACHE_KO ""
-#define JBD_KO ""
-#define JBD2_KO ""
-#define EXT3_KO ""
-#define EXT4_KO ""
-#define SQUASHFS_KO ""

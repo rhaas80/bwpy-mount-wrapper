@@ -36,6 +36,7 @@
 #include <sys/syscall.h>
 #include <sys/sysmacros.h>
 #include <sys/types.h>
+#include <sys/utsname.h>
 #include <linux/limits.h>
 #include <linux/loop.h>
 #include <linux/version.h>
@@ -88,9 +89,20 @@
 #define EXT4_NAME "ext4"
 #define SQUASHFS_CHECK_SYMBOL "squashfs_mount"
 #define SQUASHFS_NAME "squashfs"
+#define LOOP_KO "kernel/drivers/block/loop.ko"
+#define MBCACHE_KO "kernel/fs/mbcache.ko"
+#define JBD_KO "kernel/fs/jbd/jbd.ko"
+#define JBD2_KO "kernel/fs/jbd2/jbd2.ko"
+#define EXT3_KO "kernel/fs/ext3/ext3.ko"
+#define EXT4_KO "kernel/fs/ext4/ext4.ko"
+#define SQUASHFS_KO "kernel/fs/squashfs/squashfs.ko"
 
 #define MAINT_ENV "BWPY_MAINT"
 #define VERSION_ENV "BWPY_VERSION"
+
+#ifndef MODULE_BASE_DIR
+#define MODULE_BASE_DIR ""
+#endif
 
 int maint = 0;
 
@@ -260,13 +272,13 @@ int setup_module(const char* name, const char* ko_file, const char* check_symbol
     size_t ko_size;
     ssize_t read_size;
     void *ko_image;
-    char sysmodulepath[PATH_MAX];
+    char path[PATH_MAX];
     struct stat st;
 
 #ifndef ALWAYS_LOAD
-    snprintf(sysmodulepath,PATH_MAX,"/sys/module/%s",name);
+    snprintf(path,PATH_MAX,"/sys/module/%s",name);
 
-    if (stat(sysmodulepath,&st) == 0 && S_ISDIR(st.st_mode)) {
+    if (stat(path,&st) == 0 && S_ISDIR(st.st_mode)) {
         return 0;
     }
 
@@ -316,44 +328,50 @@ int setup_module(const char* name, const char* ko_file, const char* check_symbol
     }
 #endif
 
-    if (!found && strlen(ko_file) > 0) {
+    if (!found && sizeof(MODULE_BASE_DIR) > sizeof("")) {
 #endif
         int fd;
+
+        struct utsname utsname;
+
+        uname(&utsname);
+
+        snprintf(path, PATH_MAX, MODULE_BASE_DIR "/%s/%s", utsname.release, ko_file);
         
-        if ((fd = open(ko_file, O_RDONLY)) < 0) {
-            fprintf(stderr,"Error: Cannot open %s: %s!\n",ko_file,strerror(errno));
+        if ((fd = open(path, O_RDONLY)) < 0) {
+            fprintf(stderr,"Error: Cannot open %s: %s!\n",path,strerror(errno));
             return -1;
         }
 
         if (fstat(fd, &st) < 0) {
-            fprintf(stderr,"Error: Cannot stat %s: %s!\n",ko_file,strerror(errno));
+            fprintf(stderr,"Error: Cannot stat %s: %s!\n",path,strerror(errno));
             if (close(fd) < 0)
-                fprintf(stderr,"Error: Error closing %s: %s!\n",ko_file,strerror(errno));
+                fprintf(stderr,"Error: Error closing %s: %s!\n",path,strerror(errno));
             return -1;
         }
 
         ko_size  = st.st_size;
         if ((ko_image = malloc(ko_size)) == NULL) {
-            fprintf(stderr,"Error: Failed to allocate memory for kenel module %s: %s!",ko_file,strerror(errno));
+            fprintf(stderr,"Error: Failed to allocate memory for kenel module %s: %s!\n",path,strerror(errno));
             if (close(fd) < 0) 
-                fprintf(stderr,"Error: Error closing %s: %s!\n",ko_file,strerror(errno));
+                fprintf(stderr,"Error: Error closing %s: %s!\n",path,strerror(errno));
             return -1;
         }   
 
         if ((read_size = read(fd, ko_image, ko_size)) < ko_size) {
             if (read_size < 0)
-                fprintf(stderr,"Error: Error reading %s: %s!\n",ko_file,strerror(errno));
+                fprintf(stderr,"Error: Error reading %s: %s!\n",path,strerror(errno));
             else 
-                fprintf(stderr,"Error: %s smaller than expected. %zu < %zu.\n", ko_file, (size_t) read_size, ko_size);
+                fprintf(stderr,"Error: %s smaller than expected. %zu < %zu.\n", path, (size_t) read_size, ko_size);
 
             free(ko_image);
             if (close(fd) < 0) 
-                fprintf(stderr,"Error: Error closing %s: %s!\n",ko_file,strerror(errno));
+                fprintf(stderr,"Error: Error closing %s: %s!\n",path,strerror(errno));
             return -1;
         }
 
         if (close(fd) < 0) 
-            fprintf(stderr,"Error: Error closing %s: %s!\n",ko_file,strerror(errno));
+            fprintf(stderr,"Error: Error closing %s: %s!\n",path,strerror(errno));
 
         if (init_module(ko_image, ko_size, "") != 0) {
             //errno is EEXIST if module is already loaded
@@ -362,14 +380,14 @@ int setup_module(const char* name, const char* ko_file, const char* check_symbol
                 free(ko_image);
                 return 0;
             }
-            fprintf(stderr,"Error: Error inserting %s: %s!\n",ko_file,strerror(errno));
+            fprintf(stderr,"Error: Error inserting %s: %s!\n",path,strerror(errno));
             free(ko_image);
             return -1;
         }
         free(ko_image);
         return 1;
 #ifndef ALWAYS_LOAD
-    } else if (!found && strlen(ko_file) == 0) {
+    } else if (!found && sizeof(MODULE_BASE_DIR) == sizeof("")) {
         return 2;
     } else {
         return 0;
@@ -662,19 +680,6 @@ void drop_priv_perm(uid_t uid, gid_t gid) {
 int do_mount(int maint, const int loopfd, const char* loop_dev_file, const char* image_name)
 {
     unsigned long mountflags = MS_NOSUID | MS_NODEV | MS_NOATIME;
-    int lockfd;
-    int ret = 0;
-
-    if ((lockfd = open(LOCKFILE, O_RDONLY | O_CREAT, 0644)) < 0) {
-        fprintf(stderr,"Error: Cannot create lock file (" LOCKFILE "!\n");
-        return -1;
-    }
-
-    if (flock(lockfd,LOCK_EX) < 0) {
-        fprintf(stderr,"Error: Error locking " LOCKFILE "!\n");
-        ret=-1;
-        goto out;
-    }
 
     // squashfs is always read-only, so only attempt to mount in normal mode
     if (!maint) {
@@ -683,51 +688,40 @@ int do_mount(int maint, const int loopfd, const char* loop_dev_file, const char*
 #ifdef MODULE_LOADING
         if (setup_module(SQUASHFS_NAME,SQUASHFS_KO,SQUASHFS_CHECK_SYMBOL) < 0) {
             fprintf(stderr,"Error: No squashfs support!\n");
-            ret=-1;
-            goto out;
+            return -1;
         }
 #endif
 
         // Ignore errors when attempting to mount squashfs. We fall back
         // to trying ext3, and fatal errors will be handled there.
         if (mount(loop_dev_file, MOUNTPOINT, "squashfs", mountflags, "") == 0) {
-            goto out;
+            return 0;
         }
     }
 
 #ifdef MODULE_LOADING
     if (setup_module(MBCACHE_NAME,MBCACHE_KO,MBCACHE_CHECK_SYMBOL) < 0) {
         fprintf(stderr,"Error: No mbcache support!\n");
-        ret=-1;
-        goto out;
+        return -1;
     }
 
     if (setup_module(JBD_NAME,JBD_KO,JBD_CHECK_SYMBOL) < 0) {
         fprintf(stderr,"Error: No jbd support!\n");
-        ret=-1;
-        goto out;
+        return -1;
     }
 
     if (setup_module(EXT3_NAME,EXT3_KO,EXT3_CHECK_SYMBOL) < 0) {
         fprintf(stderr,"Error: No ext3 support!\n");
-        ret=-1;
-        goto out;
+        return -1;
     }
 #endif
 
     if (mount(loop_dev_file, MOUNTPOINT, "ext3", mountflags, "") < 0){
         fprintf(stderr,"Error: Cannot mount ext3 image on %s (%s): %s!\n",loop_dev_file,image_name,strerror(errno));
-        ret=-1;
-        goto out;
-    }
-
-out:
-    if (close(lockfd) < 0) {
-        fprintf(stderr,"Error closing " LOCKFILE "!\n");
         return -1;
     }
 
-    return ret;
+    return 0;
 }
 
 int setup_loop_and_mount(const char* image_name) {
@@ -735,43 +729,55 @@ int setup_loop_and_mount(const char* image_name) {
     int loopfd;
     int ret=0;
     const char* loop_dev_file;
+    int lockfd;
+
+    // Trying to mount at the same time from multiple
+    // processes causes an EINVALID. Make a lock file to prevent
+    // this problem.
+    if ((lockfd = open(LOCKFILE, O_RDONLY | O_CREAT, 0644)) < 0) {
+        fprintf(stderr,"Error: Cannot create lock file (" LOCKFILE "!\n");
+        return -1;
+    }
+
+    if (flock(lockfd,LOCK_EX) < 0) {
+        fprintf(stderr,"Error: Error locking " LOCKFILE "!\n");
+        ret=-1;
+        goto error_lock;
+    }
     
 #ifdef CREATE_MOUNTPOINT
     if (mkdir_p(MOUNTPOINT,S_IRWXU | S_IRGRP | S_IXGRP | S_IROTH | S_IXOTH) < 0) {
         fprintf(stderr,"Error: Cannot create mount point %s: %s!",MOUNTPOINT,strerror(errno));
-        return -1;
+        ret=-1;
+        goto error_lock;
     }
 #endif
 
     //Unshare the mount namespace
     if (unshare(CLONE_NEWNS) != 0) {
         fprintf(stderr,"Error: Cannot create mount namespace: %s!\n",strerror(errno));
-        return -1;
+        ret=-1;
+        goto error_lock;
     }
 
     //Don't share the mounting with other processes
     if (mount("none", "/", NULL, MS_REC | MS_PRIVATE, NULL) == -1) {
         fprintf(stderr,"Error: Cannot give / subtree private mount propagation: %s!\n",strerror(errno));
-        return -1;
+        ret=-1;
+        goto error_lock;
     }
 
     if ((loopdev = setup_loop_dev(image_name)) < 0) {
         fprintf(stderr,"Error: Error setting up loop device!\n");
-        return -1;
+        ret=-1;
+        goto error_lock;
     }
 
     loop_dev_file = loop_dev_num(loopdev);
     if ((loopfd = open(loop_dev_file, O_RDWR)) < 0) {
         fprintf(stderr,"Error: Error opening loop device: %s!\n",strerror(errno));
-        return -1;
-    }
-
-    // Trying to mount the loop device at the same time from multiple
-    // processes causes an EINVALID. Lock the loop device to prevent
-    // this problem.
-    if (flock(loopfd,LOCK_EX) < 0) {
-        fprintf(stderr,"Error: Error locking loop device: %s!\n",strerror(errno));
-        return -1;
+        ret=-1;
+        goto error_lock;
     }
 
     //Set loop device to detach automatically once last mount is unmounted
@@ -781,7 +787,8 @@ int setup_loop_and_mount(const char* image_name) {
     
     if (ioctl(loopfd, LOOP_SET_STATUS64, &loopinfo64) < 0) {
         fprintf(stderr,"Error: Error setting LO_FLAGS_AUTOCLEAR: %s!\n",strerror(errno));
-        return -1;
+        ret=-1;
+        goto error_disloop;
     }
 
 
@@ -797,18 +804,29 @@ error_disloop:
         // If an error has been encountered, LO_FLAGS_AUTOCLEAR will not work.
         // Dissassociate the image manually.
         if (ioctl(loopfd,LOOP_CLR_FD) < 0) {
-            fprintf(stderr,"Error: Error disassociating image from loop device!");
+            // If the automatic disassociation did something already,
+            // the loop device will be unbound and return ENXIO
+            if (errno != ENXIO) {
+                fprintf(stderr,"Error: Error disassociating image from loop device: %s!\n",strerror(errno));
+            }
         }
     }
 
-    if (flock(loopfd,LOCK_UN) < 0) {
-        fprintf(stderr,"Error: Error unlocking loop device %s: %s!",loop_dev_file,strerror(errno));
-        ret=-1;
-    }
 
     if (close(loopfd) < 0) {
         fprintf(stderr,"Error: Error closing %s: %s!\n",loop_dev_file,strerror(errno));
         ret=-1;
+    }
+
+error_lock:
+    if (flock(lockfd,LOCK_UN) < 0) {
+        fprintf(stderr,"Error: Error unlocking " LOCKFILE "!\n");
+        return -1;
+    }
+
+    if (close(lockfd) < 0) {
+        fprintf(stderr,"Error closing " LOCKFILE "!\n");
+        return -1;
     }
     return ret;
 }

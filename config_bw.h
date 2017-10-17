@@ -15,10 +15,4 @@
 #define IMAGE_VERSIONED IMAGE_DIR "/" IMAGE_PREFIX "-%s" IMAGE_SUFFIX
 
 //Kernel Module settings
-#define LOOP_KO "/opt/cray/shifter/1.0.16-1.0502.66669.3.1.gem/kmod/3.0.101-0.46.1_1.0502.8871-cray_gem_c/kernel/drivers/block/loop.ko"
-#define MBCACHE_KO "/opt/cray/shifter/1.0.16-1.0502.66669.3.1.gem/kmod/3.0.101-0.46.1_1.0502.8871-cray_gem_c/kernel/fs/mbcache.ko"
-#define JBD_KO "/opt/cray/shifter/1.0.16-1.0502.66669.3.1.gem/kmod/3.0.101-0.46.1_1.0502.8871-cray_gem_c/kernel/fs/jbd/jbd.ko"
-#define JBD2_KO "/opt/cray/shifter/1.0.16-1.0502.66669.3.1.gem/kmod/3.0.101-0.46.1_1.0502.8871-cray_gem_c/kernel/fs/jbd2/jbd2.ko"
-#define EXT3_KO "/opt/cray/shifter/1.0.16-1.0502.66669.3.1.gem/kmod/3.0.101-0.46.1_1.0502.8871-cray_gem_c/kernel/fs/ext3/ext3.ko"
-#define EXT4_KO "/opt/cray/shifter/1.0.16-1.0502.66669.3.1.gem/kmod/3.0.101-0.46.1_1.0502.8871-cray_gem_c/kernel/fs/ext4/ext4.ko"
-#define SQUASHFS_KO "/opt/cray/shifter/1.0.16-1.0502.66669.3.1.gem/kmod/3.0.101-0.46.1_1.0502.8871-cray_gem_c/kernel/fs/squashfs/squashfs.ko"
+#define  MODULE_BASE_DIR "/opt/cray/shifter/1.0.16-1.0502.66669.3.1.gem/kmod/"
