@@ -339,6 +339,10 @@ int setup_module(const char* name, const char* ko_file, const char* check_symbol
         snprintf(path, PATH_MAX, MODULE_BASE_DIR "/%s/%s", utsname.release, ko_file);
         
         if ((fd = open(path, O_RDONLY)) < 0) {
+            if (errno == ENOENT) {
+                // Assume non-existing module files are loaded
+                return 0;
+            }
             fprintf(stderr,"Error: Cannot open %s: %s!\n",path,strerror(errno));
             return -1;
         }
