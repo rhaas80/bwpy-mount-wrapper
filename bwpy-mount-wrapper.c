@@ -731,8 +731,20 @@ int do_mount(int maint, const int loopfd, const char* loop_dev_file, const char*
 #endif
 
     if (mount(loop_dev_file, MOUNTPOINT, "ext3", mountflags, "") < 0){
-        fprintf(stderr,"Error: Cannot mount ext3 image on %s (%s): %s!\n",loop_dev_file,image_name,strerror(errno));
-        return -1;
+        // If we attempt to mount the same device at the same mount point,
+        // there will be an EBUSY. The mount(2) man page lists that EBUSY
+        // may also be produced by threads having the mount point as their
+        // active working directory, open files, etc. However, these other
+        // causes don't seem to be relavent to modern Linux. By ignoring
+        // EBUSY, the wrapper can be called multiple times without producing
+        // an error, which might happen if, for instance, this wrapper is
+        // used in a shebang and things get nested or called recursively.
+        // We will assume that EBUSY only means that the mount has already
+        // been done and is not a fatal error.
+        if (errno != EBUSY) {
+            fprintf(stderr,"Error: Cannot mount ext3 image on %s (%s): %s!\n",loop_dev_file,image_name,strerror(errno));
+            return -1;
+        }
     }
 
     return 0;
