@@ -1,4 +1,4 @@
-/* bwpy-environ: Mount namespace wrapper 
+/* bwpy-environ: Mount namespace wrapper
  * Copyright (C) 2017 Colin MacLean, University of Illinois <cmaclean@illinois.edu>
  *
  * This program is free software: you can redistribute it and/or modify
@@ -31,6 +31,7 @@
 #include <string.h>
 #include <unistd.h>
 #include <sys/file.h>
+#include <sys/mman.h>
 #include <sys/mount.h>
 #include <sys/stat.h>
 #include <sys/syscall.h>
@@ -126,7 +127,7 @@ int mkdir_p(const char* path, mode_t mode) {
     char *p;
 
     errno = 0;
-    
+
     if (len == PATH_MAX) {
         errno = ENAMETOOLONG;
         return -1;
@@ -147,7 +148,7 @@ int mkdir_p(const char* path, mode_t mode) {
             *p = 0;
             if (mkdir(pathbuf,mode) < 0) {
                 if (errno != EEXIST)
-                    return -1; 
+                    return -1;
             }
             *p = '/';
         }
@@ -155,9 +156,9 @@ int mkdir_p(const char* path, mode_t mode) {
 
     if (mkdir(pathbuf,mode) < 0) {
         if (errno != EEXIST)
-            return -1; 
+            return -1;
     }
-    
+
     return 0;
 }
 
@@ -226,8 +227,8 @@ int list_versions(void) {
 //Get the versioned image name
 //Ensure that the image name is actually in the good directory
 //This is to prevent %s.img being ../../exploit
-const char *versioned_image(const char* version_string) {
-    char good_realdir[PATH_MAX]; 
+const char *versioned_image(const char* version_string, int maint) {
+    char good_realdir[PATH_MAX];
     char suspect_path[PATH_MAX];
     static char suspect_realpath[PATH_MAX];
     char suspect_realdir[PATH_MAX];
@@ -237,7 +238,7 @@ const char *versioned_image(const char* version_string) {
         fprintf(stderr,"Error: failed to get real path of image directory: %s %s\n",IMAGE_DIR,strerror(errno));
         return NULL;
     }
-    
+
     snprintf(suspect_path,PATH_MAX,IMAGE_VERSIONED,version_string);
 
     if (strstr(version_string,"..")) {
@@ -249,7 +250,7 @@ const char *versioned_image(const char* version_string) {
         fprintf(stderr,"Error: \"/\" not permitted in version string!\n");
         return NULL;
     }
-    
+
     if (realpath(suspect_path, suspect_realpath) == NULL) {
         fprintf(stderr,"Error: failed to get real path of requested image %s: %s\n",suspect_path,strerror(errno));
         return NULL;
@@ -259,9 +260,14 @@ const char *versioned_image(const char* version_string) {
 
     if (strncmp(good_realdir,dirname(suspect_realdir),PATH_MAX) == 0)
         clean_path = suspect_realpath;
-    else 
+    else
         fprintf(stderr,"Error: Something fishy is going on here. %s != %s\n",dirname(suspect_realpath),good_realdir);
-    
+
+    if (!maint && strstr(clean_path,"maint")) {
+        fprintf(stderr,"Error: Maintenance image versions must be mounted in maintenance mode!\n");
+        return NULL;
+    }
+
     return clean_path;
 }
 
@@ -269,7 +275,6 @@ int setup_module(const char* name, const char* ko_file, const char* check_symbol
     FILE *f;
     char line[4096];
     int found = 0;
-    size_t ko_size;
     ssize_t read_size;
     void *ko_image;
     char path[PATH_MAX];
@@ -337,7 +342,7 @@ int setup_module(const char* name, const char* ko_file, const char* check_symbol
         uname(&utsname);
 
         snprintf(path, PATH_MAX, MODULE_BASE_DIR "/%s/%s", utsname.release, ko_file);
-        
+
         if ((fd = open(path, O_RDONLY)) < 0) {
             if (errno == ENOENT) {
                 // Assume non-existing module files are loaded
@@ -354,41 +359,46 @@ int setup_module(const char* name, const char* ko_file, const char* check_symbol
             return -1;
         }
 
-        ko_size  = st.st_size;
-        if ((ko_image = malloc(ko_size)) == NULL) {
-            fprintf(stderr,"Error: Failed to allocate memory for kenel module %s: %s!\n",path,strerror(errno));
-            if (close(fd) < 0) 
-                fprintf(stderr,"Error: Error closing %s: %s!\n",path,strerror(errno));
+        if (!S_ISREG (st.st_mode)) {
+            fprintf(stderr,"Error: %s is not a regular file!\n",path);
             return -1;
-        }   
+        }
 
-        if ((read_size = read(fd, ko_image, ko_size)) < ko_size) {
-            if (read_size < 0)
-                fprintf(stderr,"Error: Error reading %s: %s!\n",path,strerror(errno));
-            else 
-                fprintf(stderr,"Error: %s smaller than expected. %zu < %zu.\n", path, (size_t) read_size, ko_size);
-
-            free(ko_image);
-            if (close(fd) < 0) 
+        if ((ko_image = mmap (0, st.st_size, PROT_READ, MAP_SHARED, fd, 0)) == MAP_FAILED) {
+            fprintf(stderr,"Error: Failed to mmap kenel module %s: %s!\n",path,strerror(errno));
+            if (close(fd) < 0)
                 fprintf(stderr,"Error: Error closing %s: %s!\n",path,strerror(errno));
             return -1;
         }
 
-        if (close(fd) < 0) 
+        if (close(fd) < 0) {
             fprintf(stderr,"Error: Error closing %s: %s!\n",path,strerror(errno));
+            if (munmap(ko_image,st.st_size) == -1) {
+                fprintf(stderr,"Error: munmap failed!\n");
+            }
+            return -1;
+        }
 
-        if (init_module(ko_image, ko_size, "") != 0) {
+        if (init_module(ko_image, st.st_size, "") != 0) {
             //errno is EEXIST if module is already loaded
             //errno is ENOEXEC if module is built-in
             if (errno == EEXIST || errno == ENOEXEC) {
-                free(ko_image);
+                if (munmap(ko_image,st.st_size) == -1) {
+                    fprintf(stderr,"Error: munmap failed!\n");
+                    return -1;
+                }
                 return 0;
             }
             fprintf(stderr,"Error: Error inserting %s: %s!\n",path,strerror(errno));
-            free(ko_image);
+            if (munmap(ko_image,st.st_size) == -1) {
+                fprintf(stderr,"Error: munmap failed!\n");
+            }
             return -1;
         }
-        free(ko_image);
+        if (munmap(ko_image,st.st_size) == -1) {
+            fprintf(stderr,"Error: munmap failed!\n");
+            return -1;
+        }
         return 1;
 #ifndef ALWAYS_LOAD
     } else if (!found && sizeof(MODULE_BASE_DIR) == sizeof("")) {
@@ -424,7 +434,7 @@ const char *backing_file(const unsigned char device_num) {
             fprintf(stderr,"Error: Error reading %s: %s!\n",sys_backing_file,strerror(errno));
             return NULL;
         }
-        if (close(fd) < 0) 
+        if (close(fd) < 0)
             fprintf(stderr,"Error: Error closing %s: %s!\n",sys_backing_file,strerror(errno));
         return NULL;
     }
@@ -472,7 +482,7 @@ int setup_loop_dev(const char *image_path) {
 retry:
 
     if ((loop_dev = find_existing_loop(real_image_path)) >= 0) {
-        if (fd != -1 && close(fd) < 0) 
+        if (fd != -1 && close(fd) < 0)
             fprintf(stderr,"Error: Error closing %s: %s!\n",real_image_path,strerror(errno));
         return loop_dev;
     }
@@ -510,10 +520,10 @@ retry:
             if ((loopfd = open(dev_loop_path, O_RDWR)) < 0) {
                 if (errno == ENOENT) {
                     int mode = 0660 | S_IFBLK;
-                    
+
                     if (mknod(dev_loop_path,mode,makedev(7,loop_dev)) < 0) {
                         // Let the flock code handle a race condition
-                        // with another process attempting to create 
+                        // with another process attempting to create
                         // the same loop device by simply continuing
                         // here on an EEXIST.
                         if (errno != EEXIST) {
@@ -653,7 +663,7 @@ error_noclose:
 void drop_priv_perm(uid_t uid, gid_t gid) {
     //Permanently drop privileges
     //
-    //setresgid/setresuid makes it more obvious that we are 
+    //setresgid/setresuid makes it more obvious that we are
     //dropping real, effective, and saved uid/gid privileges
     //vs setuid(getuid()) and setgid(getuid())
     if (setresgid(gid,gid,gid) != 0) {
@@ -673,7 +683,7 @@ void drop_priv_perm(uid_t uid, gid_t gid) {
         fprintf(stderr,"Error: Privileges were not dropped!\n");
         abort();
     }
-  
+
     if (getresgid (&check_rg, &check_eg, &check_sg) != 0
             || check_rg != gid || check_eg != gid || check_sg != gid) {
         fprintf(stderr,"Error: Group privileges were not dropped!\n");
@@ -688,7 +698,7 @@ int do_mount(int maint, const int loopfd, const char* loop_dev_file, const char*
     // squashfs is always read-only, so only attempt to mount in normal mode
     if (!maint) {
         mountflags |= MS_RDONLY;
-        
+
 #ifdef MODULE_LOADING
         if (setup_module(SQUASHFS_NAME,SQUASHFS_KO,SQUASHFS_CHECK_SYMBOL) < 0) {
             fprintf(stderr,"Error: No squashfs support!\n");
@@ -748,7 +758,7 @@ int setup_loop_and_mount(const char* image_name) {
         ret=-1;
         goto error_lock;
     }
-    
+
 #ifdef CREATE_MOUNTPOINT
     if (mkdir_p(MOUNTPOINT,S_IRWXU | S_IRGRP | S_IXGRP | S_IROTH | S_IXOTH) < 0) {
         fprintf(stderr,"Error: Cannot create mount point %s: %s!",MOUNTPOINT,strerror(errno));
@@ -788,7 +798,7 @@ int setup_loop_and_mount(const char* image_name) {
     struct loop_info64 loopinfo64;
     memset(&loopinfo64, 0, sizeof(loopinfo64));
     loopinfo64.lo_flags = LO_FLAGS_AUTOCLEAR;
-    
+
     if (ioctl(loopfd, LOOP_SET_STATUS64, &loopinfo64) < 0) {
         fprintf(stderr,"Error: Error setting LO_FLAGS_AUTOCLEAR: %s!\n",strerror(errno));
         ret=-1;
@@ -844,7 +854,7 @@ int main(int argc, char *argv[])
     char version[MAX_VERSION_LENGTH];
     int has_version = 0;
     char user_shell[PATH_MAX];
-    const char *image_name = IMAGE_DEFAULT; 
+    const char *image_name = IMAGE_DEFAULT;
     const char *version_env;
 
     //Get current real and effective privileges
@@ -876,8 +886,8 @@ int main(int argc, char *argv[])
         fprintf(stderr,"Error: Cannot drop user privileges: %s!\n",strerror(errno));
         return -1;
     }
-    
-    strlcpy(wrappername,basename(argv[0]),NAME_MAX);    
+
+    strlcpy(wrappername,basename(argv[0]),NAME_MAX);
 
     int c;
 
@@ -919,7 +929,7 @@ int main(int argc, char *argv[])
             case 'V':
                 printf("Version: 1.0.0\n");
                 return 0;
-                
+
             default:
                 break;
         }
@@ -931,11 +941,6 @@ int main(int argc, char *argv[])
     if (!has_version && ((version_env = getenv(VERSION_ENV)) != NULL)) {
         has_version = 1;
         strlcpy(version,version_env,MAX_VERSION_LENGTH);
-    }
-
-    if (!maint && strstr(version,"maint")) {
-        fprintf(stderr,"Error: Maintenance image versions must be mounted in maintenance mode!");
-        return -1;
     }
 
     if (optind < argc) {
@@ -966,7 +971,7 @@ int main(int argc, char *argv[])
         int i, ngroups = 1;
         gid_t *groups = malloc(ngroups*sizeof(gid_t));
         gid_t *retry;
-        
+
         if ((pwinfo = getpwuid(uid)) == NULL) {
             fprintf(stderr,"Error: Cannot get info for user!\n");
             return -1;
@@ -995,9 +1000,9 @@ int main(int argc, char *argv[])
                 free(groups);
                 fprintf(stderr,"Error: Error getting user's groups!\n");
                 return -1;
-            }    
+            }
         }
-        
+
         for(i = 0; i < ngroups; ++i) {
             if (groups[i] == maintgrpinfo->gr_gid)
                 break;
@@ -1012,7 +1017,7 @@ int main(int argc, char *argv[])
     //Do this after parsing args, in case --help or --version are specified,
     //which take priority
     if (has_version) {
-        if ((image_name = versioned_image(version)) == NULL)
+        if ((image_name = versioned_image(version, maint)) == NULL)
             return -1;
     }
 
@@ -1029,7 +1034,7 @@ int main(int argc, char *argv[])
     if (setup_loop_and_mount(image_name) < 0) {
         return -1;
     }
-   
+
     drop_priv_perm(uid,gid);
 
     if (execvp(program,program_args) < 0) {
