@@ -19,7 +19,6 @@
 #define _GNU_SOURCE
 #include <dirent.h>
 #include <errno.h>
-#include <fcntl.h>
 #include <fnmatch.h>
 #include <getopt.h>
 #include <grp.h>
@@ -37,6 +36,7 @@
 #include <sys/syscall.h>
 #include <sys/sysmacros.h>
 #include <sys/types.h>
+#include <sys/wait.h>
 #include <sys/utsname.h>
 #include <linux/limits.h>
 #include <linux/loop.h>
@@ -103,6 +103,10 @@
 
 #ifndef MODULE_BASE_DIR
 #define MODULE_BASE_DIR ""
+#endif
+
+#ifndef SYMLINK_BASE
+#define SYMLINK_BASE "/var/run/bwpy"
 #endif
 
 int maint = 0;
@@ -227,12 +231,12 @@ int list_versions(void) {
 //Get the versioned image name
 //Ensure that the image name is actually in the good directory
 //This is to prevent %s.img being ../../exploit
-const char *versioned_image(const char* version_string, int maint) {
+char *versioned_image(const char* version_string, int maint) {
     char good_realdir[PATH_MAX];
     char suspect_path[PATH_MAX];
     static char suspect_realpath[PATH_MAX];
     char suspect_realdir[PATH_MAX];
-    const char* clean_path = NULL;
+    char* clean_path = NULL;
 
     if (realpath(IMAGE_DIR, good_realdir) == NULL) {
         fprintf(stderr,"Error: failed to get real path of image directory: %s %s\n",IMAGE_DIR,strerror(errno));
@@ -246,7 +250,7 @@ const char *versioned_image(const char* version_string, int maint) {
         return NULL;
     }
 
-    if (strstr(version_string,"/")) {
+    if (strchr(version_string,'/')) {
         fprintf(stderr,"Error: \"/\" not permitted in version string!\n");
         return NULL;
     }
@@ -432,12 +436,17 @@ const char *backing_file(const unsigned char device_num) {
     if ((len = read(fd,res,PATH_MAX)) <= 0) {
         if (len < 0) {
             fprintf(stderr,"Error: Error reading %s: %s!\n",sys_backing_file,strerror(errno));
+            if (close(fd) < 0)
+                fprintf(stderr,"Error: Error closing %s: %s!\n",sys_backing_file,strerror(errno));
             return NULL;
         }
         if (close(fd) < 0)
             fprintf(stderr,"Error: Error closing %s: %s!\n",sys_backing_file,strerror(errno));
         return NULL;
     }
+
+    if (close(fd) < 0)
+        fprintf(stderr,"Error: Error closing %s: %s!\n",sys_backing_file,strerror(errno));
 
     if (res[len-1] == '\n')
         res[len-1] = 0;
@@ -761,7 +770,7 @@ int setup_loop_and_mount(const char* image_name) {
     // processes causes an EINVALID. Make a lock file to prevent
     // this problem.
     if ((lockfd = open(LOCKFILE, O_RDONLY | O_CREAT, 0644)) < 0) {
-        fprintf(stderr,"Error: Cannot create lock file (" LOCKFILE "!\n");
+        fprintf(stderr,"Error: Cannot create lock file (" LOCKFILE ")!\n");
         return -1;
     }
 
@@ -857,17 +866,25 @@ error_lock:
     return ret;
 }
 
+int get_exe_for_pid(pid_t pid, char *buf, size_t bufsize) {
+    char path[32];
+    snprintf(path,32,"/proc/%d/exe",pid);
+    return readlink(path, buf, bufsize);
+}
+
 int main(int argc, char *argv[])
 {
     char wrappername[NAME_MAX];
-    const char *program;
+    char *program;
     char **program_args;
-    char *default_program_args[2];
+    char *default_program_args[3];
     char version[MAX_VERSION_LENGTH];
     int has_version = 0;
+    int sym = 0;
     char user_shell[PATH_MAX];
-    const char *image_name = IMAGE_DEFAULT;
+    char *image_name = IMAGE_DEFAULT;
     const char *version_env;
+    int recursing = 0;
 
     //Get current real and effective privileges
     gid_t gid = getgid();
@@ -889,6 +906,21 @@ int main(int argc, char *argv[])
     }
 #endif
 
+    // When bwpy-environ is a shebang without a second argument,
+    // test.sh will be called as bwpy-environ test.sh. This will
+    // be recursive unless we break this loop.
+    {
+        char pprocess[PATH_MAX];
+        pid_t ppid = getppid();
+        if (get_exe_for_pid(ppid, pprocess, PATH_MAX) == -1) {
+            fprintf(stderr,"Error: Cannot determine executable for parent process (%d): %s!\n",ppid,strerror(errno));
+            return -1;
+        }
+        if (strncmp(pprocess,argv[0],PATH_MAX) == 0) {
+            recursing = 1;
+        }
+    }
+
     //Temporarily drop permissions
     if (setegid(gid)) {
         fprintf(stderr,"Error: Cannot drop group privileges: %s!\n",strerror(errno));
@@ -909,12 +941,13 @@ int main(int argc, char *argv[])
             { "maintenance",   no_argument,       0,  'm' },
             { "image-version", required_argument, 0,  'v' },
             { "list",          no_argument,       0,  'l' },
+            { "symlink",       no_argument,       0,  's' },
             { "version",       no_argument,       0,  'V' },
             { "help",          no_argument,       0,  'h' },
             { 0,               0,                 0,  0   }
         };
 
-        c = getopt_long(argc, argv, "mlv:hV", long_options, &option_index);
+        c = getopt_long(argc, argv, "mlv:hVs", long_options, &option_index);
 
         if (c == -1)
             break;
@@ -934,12 +967,32 @@ int main(int argc, char *argv[])
                 list_versions();
                 return 0;
 
+            case 's':
+                sym = 1;
+                break;
+
             case 'h':
                 printf("Usage: %s [-mhv] [--image-version version] [--maintenance] [--] [program [args...]]\n",wrappername);
+                printf("\nThis wrapper mounts a disk image at " MOUNTPOINT " in a private mount namespace.\n"
+                       "\nThe optional program [args...] specifies a program to run within the mounted environment.\n"
+                       "Use '--' prior to program to allow passing arguments to the program.\n"
+                       "If no program is specified, $SHELL will be executed. If $SHELL is undefined, the wrapper\n"
+                       "will run /bin/bash.\n\n"
+                       "The -s, --symlink option is useful for accessing image files via ssh or across different versions.\n\n"
+                    "Options:\n"
+                       "     -v, --image-version VERSION    Override the image version to mount.\n"
+                       "     -m, --maintenance              (Internal Use Only!) Mount the image read-write.  Must be a member of the " MAINT_GROUP " group.\n"
+                       "     -s, --symlink                  Creates a symlink at " SYMLINK_BASE "/USER/image-name to /proc/PID/root/" MOUNTPOINT ".\n"
+                       "     -V, --version                  Print the version of this wrapper.\n"
+                       "     -h, --help                     Show this help\n"
+                    "\nEnvironment Variables:\n"
+                       "     SHELL:           The default program if none is specifed.\n"
+                       "     " VERSION_ENV ":    The image version to mount.\n"
+                       "     " MAINT_ENV ":      Mount in read-write mode.\n");
                 return 0;
 
             case 'V':
-                printf("Version: 1.0.0\n");
+                printf("%s version 1.1.0\n", wrappername);
                 return 0;
 
             default:
@@ -955,25 +1008,37 @@ int main(int argc, char *argv[])
         strlcpy(version,version_env,MAX_VERSION_LENGTH);
     }
 
-    if (optind < argc) {
-        program = argv[optind];
-        program_args = &argv[optind];
-    } else {
-        memset(user_shell,0,PATH_MAX);
-        const char* tmp = getenv("SHELL");
+    if (recursing || optind >=argc) {
+        char* shellenv = getenv("SHELL");
         struct passwd *pwinfo;
-        if (tmp == NULL) {
+        if (shellenv == NULL) {
             errno = 0;
             if ((pwinfo = getpwuid(uid)) == NULL) {
                 fprintf(stderr,"Error: Error getting user's shell: %s!\n",strerror(errno));
                 return -1;
             }
-            tmp = pwinfo->pw_shell;
+            shellenv = pwinfo->pw_shell;
         }
-        strlcpy(user_shell,tmp,PATH_MAX);
+        strlcpy(user_shell,shellenv,PATH_MAX);
+    }
+
+    if (optind < argc) {
+        program = argv[optind];
+        program_args = &argv[optind];
+    } else {
         program = user_shell;
         default_program_args[0] = user_shell;
         default_program_args[1] = NULL;
+        default_program_args[2] = NULL;
+        program_args = default_program_args;
+    }
+
+    if (recursing) {
+        default_program_args[0] = user_shell;
+        default_program_args[1] = program;
+        default_program_args[2] = NULL;
+        program=user_shell;
+        printf("%s %s %s\n", default_program_args[0], default_program_args[1], default_program_args[2]);
         program_args = default_program_args;
     }
 
@@ -1020,8 +1085,8 @@ int main(int argc, char *argv[])
                 break;
         }
         if (i == ngroups) {
-            fprintf(stderr, "Error: You must be a member of the %s group to mount read-write!\n",MAINT_GROUP);
-            return -1;
+            fprintf(stderr, "Warning: You must be a member of the " MAINT_GROUP " group to mount read-write! Mounting read-only.\n");
+            maint = 0;
         }
         free(groups);
     }
@@ -1047,11 +1112,59 @@ int main(int argc, char *argv[])
         return -1;
     }
 
+    char linkbuf[PATH_MAX];
+    char targetbuf[PATH_MAX];
+    if (sym) {
+        struct passwd *pwinfo;
+        struct stat sb;
+        if ((pwinfo = getpwuid(uid)) == NULL) {
+            fprintf(stderr,"Error: Cannot get info for user!\n");
+            return -1;
+        }
+        snprintf(linkbuf,PATH_MAX,SYMLINK_BASE "/%s",pwinfo->pw_name);
+        if (mkdir_p(linkbuf,S_IRWXU | S_IRGRP | S_IXGRP | S_IROTH | S_IXOTH) < 0) {
+            fprintf(stderr,"Error: Error creating directory %s: %s!\n",linkbuf,strerror(errno));
+            return -1;
+        }
+        if (chown(linkbuf,uid,gid) < 0) {
+            fprintf(stderr,"Error: Cannot chown %s: %s!\n",linkbuf,strerror(errno));
+            return -1;
+        }
+        char *image = basename(image_name);
+        snprintf(linkbuf,PATH_MAX, SYMLINK_BASE "/%s/%s",pwinfo->pw_name,image);
+        if (unlink(linkbuf) == -1) {
+            if (errno != ENOENT) {
+                fprintf(stderr,"Error: Cannot remove %s!\n",linkbuf);
+                return -1;
+            }
+        }
+    }
+
     drop_priv_perm(uid,gid);
 
-    if (execvp(program,program_args) < 0) {
+    pid_t child_pid = fork();
+
+    if (child_pid == 0) {
+        // Child
+        execvp(program,program_args);
         fprintf(stderr,"Error: Error executing %s: %s!\n",program,strerror(errno));
+        _exit(-1);
+    } else if (child_pid < 0) {
+        fprintf(stderr,"Error: Error forking!\n");
         return -1;
+    } else {
+        // Parent
+        if (sym) {
+            snprintf(targetbuf,PATH_MAX,"/proc/%d/root" MOUNTPOINT,child_pid);
+            if (symlink(targetbuf,linkbuf) == -1) {
+                if (errno != EEXIST) {
+                    fprintf(stderr,"Error: Cannot create symlink %s -> %s: %s\n",linkbuf,targetbuf,strerror(errno));
+                    return -1;
+                }
+            }
+        }
+        int status;
+        wait(&status);
     }
     return -2;
 }
