@@ -237,11 +237,14 @@ char *versioned_image(const char* version_string, int maint) {
     static char suspect_realpath[PATH_MAX];
     char suspect_realdir[PATH_MAX];
     char* clean_path = NULL;
+    char* image_dir = IMAGE_DIR;
 
-    if (realpath(IMAGE_DIR, good_realdir) == NULL) {
-        fprintf(stderr,"Error: failed to get real path of image directory: %s %s\n",IMAGE_DIR,strerror(errno));
-        return NULL;
-    }
+    do {
+        if (realpath(image_dir, good_realdir) == NULL) {
+            fprintf(stderr,"Error: failed to get real path of image directory: %s %s\n",IMAGE_DIR,strerror(errno));
+            return NULL;
+        }
+    } while(strncmp(image_dir, good_realdir, PATH_MAX) != 0);
 
     snprintf(suspect_path,PATH_MAX,IMAGE_VERSIONED,version_string);
 
@@ -255,10 +258,12 @@ char *versioned_image(const char* version_string, int maint) {
         return NULL;
     }
 
-    if (realpath(suspect_path, suspect_realpath) == NULL) {
-        fprintf(stderr,"Error: failed to get real path of requested image %s: %s\n",suspect_path,strerror(errno));
-        return NULL;
-    }
+    do {
+        if (realpath(suspect_path, suspect_realpath) == NULL) {
+            fprintf(stderr,"Error: failed to get real path of requested image %s: %s\n",suspect_path,strerror(errno));
+            return NULL;
+        }
+    } while(strncmp(suspect_path, suspect_realpath, PATH_MAX) != 0);
 
     strlcpy(suspect_realdir,suspect_realpath,PATH_MAX);
 
@@ -1114,8 +1119,8 @@ int main(int argc, char *argv[])
 
     char linkbuf[PATH_MAX];
     char targetbuf[PATH_MAX];
+    struct passwd *pwinfo;
     if (sym) {
-        struct passwd *pwinfo;
         struct stat sb;
         if ((pwinfo = getpwuid(uid)) == NULL) {
             fprintf(stderr,"Error: Cannot get info for user!\n");
@@ -1134,7 +1139,7 @@ int main(int argc, char *argv[])
         snprintf(linkbuf,PATH_MAX, SYMLINK_BASE "/%s/%s",pwinfo->pw_name,image);
         if (unlink(linkbuf) == -1) {
             if (errno != ENOENT) {
-                fprintf(stderr,"Error: Cannot remove %s!\n",linkbuf);
+                fprintf(stderr,"Error: Cannot remove %s: %s!\n",linkbuf,strerror(errno));
                 return -1;
             }
         }
@@ -1158,13 +1163,27 @@ int main(int argc, char *argv[])
             snprintf(targetbuf,PATH_MAX,"/proc/%d/root" MOUNTPOINT,child_pid);
             if (symlink(targetbuf,linkbuf) == -1) {
                 if (errno != EEXIST) {
-                    fprintf(stderr,"Error: Cannot create symlink %s -> %s: %s\n",linkbuf,targetbuf,strerror(errno));
+                    fprintf(stderr,"Error: Cannot create symlink %s -> %s: %s!\n",linkbuf,targetbuf,strerror(errno));
                     return -1;
                 }
             }
         }
         int status;
         wait(&status);
+        if (sym) {
+            char linktarget[PATH_MAX];
+            if (readlink(linkbuf,linktarget,PATH_MAX) == -1) {
+                fprintf(stderr,"Error: Cannot read link %s: %s!\n",linkbuf,strerror(errno));
+                return -1;
+            }
+            // Another instance may have overwritten the symlink
+            if (strncmp(linktarget,targetbuf,PATH_MAX) == 0) {
+                if (unlink(linkbuf) == -1) {
+                    fprintf(stderr,"Error: Cannot remove %s: %s!\n",linkbuf,strerror(errno));
+                    return -1;
+                }
+            }
+        }
     }
     return -2;
 }
