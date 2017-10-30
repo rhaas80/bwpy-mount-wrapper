@@ -232,18 +232,27 @@ int list_versions(void) {
 //Ensure that the image name is actually in the good directory
 //This is to prevent %s.img being ../../exploit
 char *versioned_image(const char* version_string, int maint) {
-    char good_realdir[PATH_MAX];
-    char suspect_path[PATH_MAX];
-    static char suspect_realpath[PATH_MAX];
-    char suspect_realdir[PATH_MAX];
+    char image_dir_buf[PATH_MAX];
+    char good_realdir_buf[PATH_MAX];
+    char suspect_path_buf[PATH_MAX];
+    char suspect_realpath_buf[PATH_MAX];
+    static char realdir[PATH_MAX];
     char* clean_path = NULL;
-    char* image_dir = IMAGE_DIR;
+
+    char* image_dir = image_dir_buf;
+    char* good_realdir = good_realdir_buf;
+    char* suspect_path = suspect_path_buf;
+    char* suspect_realpath = suspect_realpath_buf;
+    strlcpy(image_dir,IMAGE_DIR,PATH_MAX);
 
     do {
         if (realpath(image_dir, good_realdir) == NULL) {
             fprintf(stderr,"Error: failed to get real path of image directory: %s %s\n",IMAGE_DIR,strerror(errno));
             return NULL;
         }
+        char* tmp = good_realdir;
+        good_realdir = image_dir;
+        image_dir = tmp;
     } while(strncmp(image_dir, good_realdir, PATH_MAX) != 0);
 
     snprintf(suspect_path,PATH_MAX,IMAGE_VERSIONED,version_string);
@@ -263,12 +272,15 @@ char *versioned_image(const char* version_string, int maint) {
             fprintf(stderr,"Error: failed to get real path of requested image %s: %s\n",suspect_path,strerror(errno));
             return NULL;
         }
+        char *tmp = suspect_path;
+        suspect_path = suspect_realpath;
+        suspect_realpath = tmp;
     } while(strncmp(suspect_path, suspect_realpath, PATH_MAX) != 0);
 
-    strlcpy(suspect_realdir,suspect_realpath,PATH_MAX);
+    strlcpy(realdir,suspect_realpath,PATH_MAX);
 
-    if (strncmp(good_realdir,dirname(suspect_realdir),PATH_MAX) == 0)
-        clean_path = suspect_realpath;
+    if (strncmp(good_realdir,dirname(realdir),PATH_MAX) == 0)
+        clean_path = realdir;
     else
         fprintf(stderr,"Error: Something fishy is going on here. %s != %s\n",dirname(suspect_realpath),good_realdir);
 
