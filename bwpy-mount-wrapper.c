@@ -232,11 +232,10 @@ int list_versions(void) {
 //Ensure that the image name is actually in the good directory
 //This is to prevent %s.img being ../../exploit
 char *versioned_image(const char* version_string, int maint) {
-    char image_dir_buf[PATH_MAX];
     char good_realdir[PATH_MAX];
     char suspect_path[PATH_MAX];
-    char suspect_realpath[PATH_MAX];
-    static char realdir[PATH_MAX];
+    static char suspect_realpath[PATH_MAX];
+    char suspect_realdir[PATH_MAX];
     char* clean_path = NULL;
 
     if (realpath(IMAGE_DIR, good_realdir) == NULL) {
@@ -261,10 +260,10 @@ char *versioned_image(const char* version_string, int maint) {
         return NULL;
     }
 
-    strlcpy(realdir,suspect_realpath,PATH_MAX);
+    strlcpy(suspect_realdir,suspect_realpath,PATH_MAX);
 
-    if (strncmp(good_realdir,dirname(realdir),PATH_MAX) == 0)
-        clean_path = realdir;
+    if (strncmp(good_realdir,dirname(suspect_realdir),PATH_MAX) == 0)
+        clean_path = suspect_realpath;
     else
         fprintf(stderr,"Error: Something fishy is going on here. %s != %s\n",dirname(suspect_realpath),good_realdir);
 
