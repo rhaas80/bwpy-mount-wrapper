@@ -1143,6 +1143,12 @@ int main(int argc, char *argv[])
 
     drop_priv_perm(uid,gid);
 
+    char *ld_library_path = getenv("LD_LIBRARY_PATH_WRAP");
+    if (ld_library_path != NULL && setenv("LD_LIBRARY_PATH",ld_library_path,1) != 0) {
+        fprintf(stderr, "Error: Cannot set LD_LIBRARY_PATH: %s\n",strerror(errno));
+        return -1;
+    }
+
     pid_t child_pid = fork();
 
     if (child_pid == 0) {
