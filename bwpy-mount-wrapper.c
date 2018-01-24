@@ -1148,6 +1148,12 @@ int main(int argc, char *argv[])
         return -1;
     }
 
+    char *ld_preload = getenv("LD_PRELOAD_WRAP");
+    if (ld_library_path != NULL && setenv("LD_PRELOAD",ld_preload,1) != 0) {
+        fprintf(stderr, "Error: Cannot set LD_PRELOAD: %s\n",strerror(errno));
+        return -1;
+    }
+
     pid_t child_pid = fork();
 
     if (child_pid == 0) {
