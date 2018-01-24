@@ -895,7 +895,7 @@ int main(int argc, char *argv[])
     uid_t suid = euid;
 
     if (egid != 0) {
-        fprintf(stderr,"Error: Not a root suid binary!\n");
+        fprintf(stderr,"Error: Not a root suid binary! (When launched via aprun, `aprun -b` must be used)\n");
         return -1;
     }
 
