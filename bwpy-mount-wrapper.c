@@ -896,13 +896,13 @@ int main(int argc, char *argv[])
 
     if (egid != 0) {
         fprintf(stderr,"Error: Not a root suid binary!\n");
-        return -1;
+        return EXIT_FAILURE;
     }
 
 #ifdef MODULE_LOADING
     if (setup_module(LOOP_NAME,LOOP_KO,LOOP_CHECK_SYMBOL) < 0) {
         fprintf(stderr,"Error: No loop device support!\n");
-        return -1;
+        return EXIT_FAILURE;
     }
 #endif
 
@@ -914,7 +914,7 @@ int main(int argc, char *argv[])
         pid_t ppid = getppid();
         if (get_exe_for_pid(ppid, pprocess, PATH_MAX) == -1) {
             fprintf(stderr,"Error: Cannot determine executable for parent process (%d): %s!\n",ppid,strerror(errno));
-            return -1;
+            return EXIT_FAILURE;
         }
         if (strncmp(pprocess,argv[0],PATH_MAX) == 0) {
             recursing = 1;
@@ -924,11 +924,11 @@ int main(int argc, char *argv[])
     //Temporarily drop permissions
     if (setegid(gid)) {
         fprintf(stderr,"Error: Cannot drop group privileges: %s!\n",strerror(errno));
-        return -1;
+        return EXIT_FAILURE;
     }
     if (seteuid(uid)) {
         fprintf(stderr,"Error: Cannot drop user privileges: %s!\n",strerror(errno));
-        return -1;
+        return EXIT_FAILURE;
     }
 
     strlcpy(wrappername,basename(argv[0]),NAME_MAX);
@@ -1015,7 +1015,7 @@ int main(int argc, char *argv[])
             errno = 0;
             if ((pwinfo = getpwuid(uid)) == NULL) {
                 fprintf(stderr,"Error: Error getting user's shell: %s!\n",strerror(errno));
-                return -1;
+                return EXIT_FAILURE;
             }
             shellenv = pwinfo->pw_shell;
         }
@@ -1051,17 +1051,17 @@ int main(int argc, char *argv[])
 
         if ((pwinfo = getpwuid(uid)) == NULL) {
             fprintf(stderr,"Error: Cannot get info for user!\n");
-            return -1;
+            return EXIT_FAILURE;
         }
 
         if ((maintgrpinfo = getgrnam(MAINT_GROUP)) == NULL) {
             fprintf(stderr,"Error: Cannot get group info for maintenance group!\n");
-            return -1;
+            return EXIT_FAILURE;
         }
 
         if (groups == NULL) {
             fprintf(stderr,"Error: Cannot allocate memory!\n");
-            return -1;
+            return EXIT_FAILURE;
         }
 
         if (getgrouplist(pwinfo->pw_name, pwinfo->pw_gid, groups, &ngroups) == -1) {
@@ -1069,14 +1069,14 @@ int main(int argc, char *argv[])
             if (retry == NULL) {
                 fprintf(stderr,"Error: Cannot allocate memory!\n");
                 free(groups);
-                return -1;
+                return EXIT_FAILURE;
             } else {
                 groups = retry;
             }
             if (getgrouplist(pwinfo->pw_name, pwinfo->pw_gid, groups, &ngroups) == -1) {
                 free(groups);
                 fprintf(stderr,"Error: Error getting user's groups!\n");
-                return -1;
+                return EXIT_FAILURE;
             }
         }
 
@@ -1095,21 +1095,21 @@ int main(int argc, char *argv[])
     //which take priority
     if (has_version) {
         if ((image_name = versioned_image(version, maint)) == NULL)
-            return -1;
+            return EXIT_FAILURE;
     }
 
     //Regain permissions
     if (seteuid(suid)) {
         fprintf(stderr,"Error: Cannot regain user privileges: %s!\n",strerror(errno));
-        return -1;
+        return EXIT_FAILURE;
     }
     if (setegid(sgid)) {
         fprintf(stderr,"Error: Cannot regain group privileges: %s!\n",strerror(errno));
-        return -1;
+        return EXIT_FAILURE;
     }
 
     if (setup_loop_and_mount(image_name) < 0) {
-        return -1;
+        return EXIT_FAILURE;
     }
 
     char linkbuf[PATH_MAX];
@@ -1119,23 +1119,23 @@ int main(int argc, char *argv[])
         struct stat sb;
         if ((pwinfo = getpwuid(uid)) == NULL) {
             fprintf(stderr,"Error: Cannot get info for user!\n");
-            return -1;
+            return EXIT_FAILURE;
         }
         snprintf(linkbuf,PATH_MAX,SYMLINK_BASE "/%s",pwinfo->pw_name);
         if (mkdir_p(linkbuf,S_IRWXU | S_IRGRP | S_IXGRP | S_IROTH | S_IXOTH) < 0) {
             fprintf(stderr,"Error: Error creating directory %s: %s!\n",linkbuf,strerror(errno));
-            return -1;
+            return EXIT_FAILURE;
         }
         if (chown(linkbuf,uid,gid) < 0) {
             fprintf(stderr,"Error: Cannot chown %s: %s!\n",linkbuf,strerror(errno));
-            return -1;
+            return EXIT_FAILURE;
         }
         char *image = basename(image_name);
         snprintf(linkbuf,PATH_MAX, SYMLINK_BASE "/%s/%s",pwinfo->pw_name,image);
         if (unlink(linkbuf) == -1) {
             if (errno != ENOENT) {
                 fprintf(stderr,"Error: Cannot remove %s!\n",linkbuf);
-                return -1;
+                return EXIT_FAILURE;
             }
         }
     }
@@ -1145,13 +1145,13 @@ int main(int argc, char *argv[])
     char *ld_library_path = getenv("LD_LIBRARY_PATH_WRAP");
     if (ld_library_path != NULL && setenv("LD_LIBRARY_PATH",ld_library_path,1) != 0) {
         fprintf(stderr, "Error: Cannot set LD_LIBRARY_PATH: %s\n",strerror(errno));
-        return -1;
+        return EXIT_FAILURE;
     }
 
     char *ld_preload = getenv("LD_PRELOAD_WRAP");
     if (ld_library_path != NULL && setenv("LD_PRELOAD",ld_preload,1) != 0) {
         fprintf(stderr, "Error: Cannot set LD_PRELOAD: %s\n",strerror(errno));
-        return -1;
+        return EXIT_FAILURE;
     }
 
     pid_t child_pid = fork();
@@ -1160,10 +1160,10 @@ int main(int argc, char *argv[])
         // Child
         execvp(program,program_args);
         fprintf(stderr,"Error: Error executing %s: %s!\n",program,strerror(errno));
-        _exit(-1);
+        _exit(EXIT_FAILURE);
     } else if (child_pid < 0) {
         fprintf(stderr,"Error: Error forking!\n");
-        return -1;
+        return EXIT_FAILURE;
     } else {
         // Parent
         if (sym) {
@@ -1171,13 +1171,27 @@ int main(int argc, char *argv[])
             if (symlink(targetbuf,linkbuf) == -1) {
                 if (errno != EEXIST) {
                     fprintf(stderr,"Error: Cannot create symlink %s -> %s: %s\n",linkbuf,targetbuf,strerror(errno));
-                    return -1;
+                    return EXIT_FAILURE;
                 }
             }
         }
         int status;
-        wait(&status);
+        if (wait(&status) == -1) {
+            fprintf(stderr,"Error: wait() failed: %s\n",strerror(errno));
+            return EXIT_FAILURE;
+        }
+        if (WIFEXITED(status)) {
+            return WEXITSTATUS(status);
+        }
+        if (WIFSIGNALED(status)) {
+            if (WCOREDUMP(status)) {
+                fprintf(stderr,"Child terminated with signal %d. Core dumped.\n",WTERMSIG(status));
+            } else {
+                fprintf(stderr,"Child terminated with signal %d.\n",WTERMSIG(status));
+            }
+            return EXIT_FAILURE;
+        }
     }
-    return -2;
+    return EXIT_FAILURE;
 }
 // vim: tabstop=4:shiftwidth=4:expandtab
