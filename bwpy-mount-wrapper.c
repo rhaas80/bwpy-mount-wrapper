@@ -109,6 +109,17 @@
 #define SYMLINK_BASE "/var/run/bwpy"
 #endif
 
+#define RESTORE_ENV_SUFFIX "BWPYBAK"
+
+#define RESTORE_ENV(VAR) \
+do { \
+    char *envvar = getenv( VAR "_" RESTORE_ENV_SUFFIX); \
+    if (envvar != NULL && setenv(VAR,envvar,1) != 0) { \
+        fprintf(stderr, "Error: Cannot set " VAR ": %s\n",strerror(errno)); \
+        return EXIT_FAILURE; \
+    } \
+} while(0)
+
 int maint = 0;
 
 #ifndef strlcpy
@@ -1142,17 +1153,8 @@ int main(int argc, char *argv[])
 
     drop_priv_perm(uid,gid);
 
-    char *ld_library_path = getenv("LD_LIBRARY_PATH_WRAP");
-    if (ld_library_path != NULL && setenv("LD_LIBRARY_PATH",ld_library_path,1) != 0) {
-        fprintf(stderr, "Error: Cannot set LD_LIBRARY_PATH: %s\n",strerror(errno));
-        return EXIT_FAILURE;
-    }
-
-    char *ld_preload = getenv("LD_PRELOAD_WRAP");
-    if (ld_library_path != NULL && setenv("LD_PRELOAD",ld_preload,1) != 0) {
-        fprintf(stderr, "Error: Cannot set LD_PRELOAD: %s\n",strerror(errno));
-        return EXIT_FAILURE;
-    }
+    RESTORE_ENV("LD_LIBRARY_PATH");
+    RESTORE_ENV("LD_PRELOAD");
 
     pid_t child_pid = fork();
 
