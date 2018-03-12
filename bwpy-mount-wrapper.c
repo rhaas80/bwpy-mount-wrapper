@@ -896,6 +896,7 @@ int main(int argc, char *argv[])
     char *image_name = IMAGE_DEFAULT;
     const char *version_env;
     int recursing = 0;
+    char *argv0 = NULL;
 
     //Get current real and effective privileges
     gid_t gid = getgid();
@@ -949,6 +950,7 @@ int main(int argc, char *argv[])
     while (1) {
         int option_index = 0;
         static struct option long_options[] = {
+            { "argv0",         required_argument, 0,  'a' },
             { "maintenance",   no_argument,       0,  'm' },
             { "image-version", required_argument, 0,  'v' },
             { "list",          no_argument,       0,  'l' },
@@ -958,12 +960,15 @@ int main(int argc, char *argv[])
             { 0,               0,                 0,  0   }
         };
 
-        c = getopt_long(argc, argv, "mlv:hVs", long_options, &option_index);
+        c = getopt_long(argc, argv, "+a:mlv:hVs", long_options, &option_index);
 
         if (c == -1)
             break;
 
         switch (c) {
+            case 'a':
+                argv0 = optarg;
+                break;
             case 'm':
                 maint = 1;
                 break;
@@ -991,6 +996,7 @@ int main(int argc, char *argv[])
                        "will run /bin/bash.\n\n"
                        "The -s, --symlink option is useful for accessing image files via ssh or across different versions.\n\n"
                     "Options:\n"
+                       "     -a, --argv0 STRING             Set the argv[0] of the executed process to the specified string. Useful for wrappers.\n"
                        "     -v, --image-version VERSION    Override the image version to mount.\n"
                        "     -m, --maintenance              (Internal Use Only!) Mount the image read-write.  Must be a member of the " MAINT_GROUP " group.\n"
                        "     -s, --symlink                  Creates a symlink at " SYMLINK_BASE "/USER/image-name to /proc/PID/root/" MOUNTPOINT ".\n"
@@ -1036,6 +1042,8 @@ int main(int argc, char *argv[])
     if (optind < argc) {
         program = argv[optind];
         program_args = &argv[optind];
+        if (argv0)
+            program_args[0] = argv0;
     } else {
         program = user_shell;
         default_program_args[0] = user_shell;
@@ -1049,7 +1057,6 @@ int main(int argc, char *argv[])
         default_program_args[1] = program;
         default_program_args[2] = NULL;
         program=user_shell;
-        printf("%s %s %s\n", default_program_args[0], default_program_args[1], default_program_args[2]);
         program_args = default_program_args;
     }
 
