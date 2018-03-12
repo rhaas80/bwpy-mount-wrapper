@@ -1162,6 +1162,7 @@ int main(int argc, char *argv[])
 
     RESTORE_ENV("LD_LIBRARY_PATH");
     RESTORE_ENV("LD_PRELOAD");
+    RESTORE_ENV("NLSPATH");
 
     pid_t child_pid = fork();
 
