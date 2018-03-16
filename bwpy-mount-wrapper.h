@@ -92,7 +92,7 @@ int mkdir_p(const char* path, mode_t mode);
 const char* filename_to_version(char *filename);
 int filter_versions(const struct dirent *ent);
 int list_versions(void);
-char *versioned_image(const char* version_string, int maint);
+char *versioned_image(char* clean_image_path, const char* version_string, int maint);
 int setup_module(const char* name, const char* ko_file, const char* check_symbol);
 const char *loop_dev_num(const unsigned char device_num);
 const char *backing_file(const unsigned char device_num);

@@ -165,10 +165,10 @@ int list_versions(void) {
 //Get the versioned image name
 //Ensure that the image name is actually in the good directory
 //This is to prevent %s.img being ../../exploit
-char *versioned_image(const char* version_string, int maint) {
+char *versioned_image(char* clean_image_path, const char* version_string, int maint) {
     char good_realdir[PATH_MAX];
     char suspect_path[PATH_MAX];
-    static char suspect_realpath[PATH_MAX];
+    char suspect_realpath[PATH_MAX];
     char suspect_realdir[PATH_MAX];
     char* clean_path = NULL;
 
@@ -196,10 +196,13 @@ char *versioned_image(const char* version_string, int maint) {
 
     strlcpy(suspect_realdir,suspect_realpath,PATH_MAX);
 
-    if (strncmp(good_realdir,dirname(suspect_realdir),PATH_MAX) == 0)
-        clean_path = suspect_realpath;
-    else
+    if (strncmp(good_realdir,dirname(suspect_realdir),PATH_MAX) == 0) {
+        strlcpy(clean_image_path,suspect_realpath,PATH_MAX);
+        clean_path = clean_image_path;
+    } else {
         fprintf(stderr,"Error: Something fishy is going on here. %s != %s\n",dirname(suspect_realpath),good_realdir);
+        return NULL;
+    }
 
     if (!maint && strstr(clean_path,"maint")) {
         fprintf(stderr,"Error: Maintenance image versions must be mounted in maintenance mode!\n");
