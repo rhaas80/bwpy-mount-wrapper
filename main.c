@@ -23,6 +23,7 @@ int main(int argc, char *argv[])
     int sym = 0;
     char user_shell[PATH_MAX];
     char *image_name = IMAGE_DEFAULT;
+    char clean_image_path[PATH_MAX];
     const char *version_env;
     int recursing = 0;
     char *argv0 = NULL;
@@ -241,8 +242,14 @@ int main(int argc, char *argv[])
     //Do this after parsing args, in case --help or --version are specified,
     //which take priority
     if (has_version) {
-        if ((image_name = versioned_image(version, maint)) == NULL)
+        if ((image_name = versioned_image(clean_image_path, version, maint)) == NULL)
             return EXIT_FAILURE;
+    } else {
+        if (realpath(image_name,clean_image_path) == NULL) {
+            fprintf(stderr,"Error: failed to get real path of image directory: %s %s\n",image_name,strerror(errno));
+            return EXIT_FAILURE;
+        }
+        image_name = clean_image_path;
     }
 
     //Regain permissions
