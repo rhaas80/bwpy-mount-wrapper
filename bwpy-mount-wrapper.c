@@ -474,8 +474,16 @@ int find_existing_loop(const char *image_path)
 
     for (loop_dev = 0; loop_dev < MAX_LOOP_DEVS; ++loop_dev) {
         bf = backing_file(loop_dev);
-        if (bf != NULL && strncmp(bf,image_path,PATH_MAX) == 0)
-            return loop_dev;
+        if (bf != NULL) {
+            char bf_copy[PATH_MAX];
+            strlcpy(bf_copy,bf,PATH_MAX);
+            char* bf_filename = basename(bf_copy);
+            char image_path_copy[PATH_MAX];
+            strlcpy(image_path_copy,image_path,PATH_MAX);
+            char* image_filename = basename(image_path_copy);
+            if (strncmp(bf_filename,image_filename,NAME_MAX) == 0)
+                return loop_dev;
+        }
     }
 
     return -1;
