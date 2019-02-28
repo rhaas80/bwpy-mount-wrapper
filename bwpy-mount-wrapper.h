@@ -21,6 +21,7 @@
 #define CONFIG_TEST 0
 #define CONFIG_JYC  1
 #define CONFIG_BW   2
+#define CONFIG_NULL 2
 
 
 #ifndef CONFIG_TYPE

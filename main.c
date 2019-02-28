@@ -252,6 +252,7 @@ int main(int argc, char *argv[])
 
     //Do this after parsing args, in case --help or --version are specified,
     //which take priority
+#if (CONFIG_TYPE != CONFIG_NULL)
     if (has_version) {
         if ((image_name = versioned_image(clean_image_path, version, maint)) == NULL)
             return EXIT_FAILURE;
@@ -262,6 +263,7 @@ int main(int argc, char *argv[])
         }
         image_name = clean_image_path;
     }
+#endif
 
     //Regain permissions
     if (seteuid(suid)) {
@@ -273,9 +275,11 @@ int main(int argc, char *argv[])
         return EXIT_FAILURE;
     }
 
+#if (CONFIG_TYPE != CONFIG_NULL)
     if (setup_loop_and_mount(image_name) < 0) {
         return EXIT_FAILURE;
     }
+#endif
 
     char linkbuf[PATH_MAX];
     char targetbuf[PATH_MAX];

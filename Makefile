@@ -21,6 +21,12 @@ test:
 	sudo chown root:root bwpy-environ
 	sudo chmod +s bwpy-environ
 
+null:
+	$(CC) -O3 -DCONFIG_TYPE=CONFIG_NULL bwpy-mount-wrapper.c main.c -o bwpy-environ
+	sudo chown root:root bwpy-environ
+	sudo chmod +s bwpy-environ
+	sudo chmod ugo+rx bwpy-environ
+
 regtest:
 	$(CC) -O3 -DCONFIG_TYPE=CONFIG_TEST bwpy-mount-wrapper.c test.c -o regtest
 
