@@ -13,16 +13,6 @@
 
 #include "bwpy-mount-wrapper.h"
 
-// forward signals received to my child
-pid_t child_pid = -1;
-typedef void (*sighandler_t)(int);
-void sighandler(int sig) {
-    if (child_pid > 0) {
-        kill(child_pid, sig);
-    }
-    signal(sig, sighandler);
-}
-
 int main(int argc, char *argv[])
 {
     char wrappername[NAME_MAX];
@@ -307,6 +297,13 @@ int main(int argc, char *argv[])
                 return EXIT_FAILURE;
             }
         }
+        snprintf(targetbuf,PATH_MAX,"/proc/%d/root" MOUNTPOINT,getpid());
+        if (symlink(targetbuf,linkbuf) == -1) {
+            if (errno != EEXIST) {
+                fprintf(stderr,"Error: Cannot create symlink %s -> %s: %s\n",linkbuf,targetbuf,strerror(errno));
+                return EXIT_FAILURE;
+            }
+        }
     }
 
     drop_priv_perm(uid,gid);
@@ -315,65 +312,11 @@ int main(int argc, char *argv[])
     RESTORE_ENV("LD_PRELOAD");
     RESTORE_ENV("NLSPATH");
 
-    child_pid = fork();
+    execvp(program,program_args);
+    // execvp only returns on error
 
-    if (child_pid == 0) {
-        // Child
-        execvp(program,program_args);
-        fprintf(stderr,"Error: Error executing %s: %s!\n",program,strerror(errno));
-        _exit(EXIT_FAILURE);
-    } else if (child_pid < 0) {
-        fprintf(stderr,"Error: Error forking!\n");
-        return EXIT_FAILURE;
-    } else {
-        // ignore signals while child is running
-        // there is a small window where signal might terminate the parent
-        // before we start ignoring them
-        // this prevents out child accidentally being daemonized when we quit
-        // and eg losing acces to the controlling terminal
-        sighandler_t old_HUP = signal(SIGHUP, sighandler);
-        sighandler_t old_INT = signal(SIGINT, sighandler);
-        sighandler_t old_QUIT = signal(SIGQUIT, sighandler);
-        sighandler_t old_PIPE = signal(SIGPIPE, sighandler);
-        sighandler_t old_TERM = signal(SIGTERM, sighandler);
+    fprintf(stderr,"Error: Error executing %s: %s!\n",program,strerror(errno));
 
-        // Parent
-        if (sym) {
-            snprintf(targetbuf,PATH_MAX,"/proc/%d/root" MOUNTPOINT,child_pid);
-            if (symlink(targetbuf,linkbuf) == -1) {
-                if (errno != EEXIST) {
-                    fprintf(stderr,"Error: Cannot create symlink %s -> %s: %s\n",linkbuf,targetbuf,strerror(errno));
-                    return EXIT_FAILURE;
-                }
-            }
-        }
-        int status;
-        int wait_pid = wait(&status);
-
-        // restore signal handlers (briefly)
-        signal(SIGHUP, old_HUP);
-        signal(SIGINT, old_INT);
-        signal(SIGQUIT, old_QUIT);
-        signal(SIGPIPE, old_PIPE);
-        signal(SIGTERM, old_TERM);
-
-
-        if (wait_pid == -1) {
-            fprintf(stderr,"Error: wait() failed: %s\n",strerror(errno));
-            return EXIT_FAILURE;
-        }
-        if (WIFEXITED(status)) {
-            return WEXITSTATUS(status);
-        }
-        if (WIFSIGNALED(status)) {
-            if (WCOREDUMP(status)) {
-                fprintf(stderr,"Child terminated with signal %d. Core dumped.\n",WTERMSIG(status));
-            } else {
-                fprintf(stderr,"Child terminated with signal %d.\n",WTERMSIG(status));
-            }
-            return EXIT_FAILURE;
-        }
-    }
     return EXIT_FAILURE;
 }
 
