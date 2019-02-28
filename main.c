@@ -3,6 +3,7 @@
 #include <grp.h>
 #include <libgen.h>
 #include <pwd.h>
+#include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -11,6 +12,16 @@
 #include <sys/wait.h>
 
 #include "bwpy-mount-wrapper.h"
+
+// forward signals received to my child
+pid_t child_pid = -1;
+typedef void (*sighandler_t)(int);
+void sighandler(int sig) {
+    if (child_pid > 0) {
+        kill(child_pid, sig);
+    }
+    signal(sig, sighandler);
+}
 
 int main(int argc, char *argv[])
 {
@@ -300,7 +311,7 @@ int main(int argc, char *argv[])
     RESTORE_ENV("LD_PRELOAD");
     RESTORE_ENV("NLSPATH");
 
-    pid_t child_pid = fork();
+    child_pid = fork();
 
     if (child_pid == 0) {
         // Child
@@ -311,6 +322,17 @@ int main(int argc, char *argv[])
         fprintf(stderr,"Error: Error forking!\n");
         return EXIT_FAILURE;
     } else {
+        // ignore signals while child is running
+        // there is a small window where signal might terminate the parent
+        // before we start ignoring them
+        // this prevents out child accidentally being daemonized when we quit
+        // and eg losing acces to the controlling terminal
+        sighandler_t old_HUP = signal(SIGHUP, sighandler);
+        sighandler_t old_INT = signal(SIGINT, sighandler);
+        sighandler_t old_QUIT = signal(SIGQUIT, sighandler);
+        sighandler_t old_PIPE = signal(SIGPIPE, sighandler);
+        sighandler_t old_TERM = signal(SIGTERM, sighandler);
+
         // Parent
         if (sym) {
             snprintf(targetbuf,PATH_MAX,"/proc/%d/root" MOUNTPOINT,child_pid);
@@ -322,7 +344,17 @@ int main(int argc, char *argv[])
             }
         }
         int status;
-        if (wait(&status) == -1) {
+        int wait_pid = wait(&status);
+
+        // restore signal handlers (briefly)
+        signal(SIGHUP, old_HUP);
+        signal(SIGINT, old_INT);
+        signal(SIGQUIT, old_QUIT);
+        signal(SIGPIPE, old_PIPE);
+        signal(SIGTERM, old_TERM);
+
+
+        if (wait_pid == -1) {
             fprintf(stderr,"Error: wait() failed: %s\n",strerror(errno));
             return EXIT_FAILURE;
         }
