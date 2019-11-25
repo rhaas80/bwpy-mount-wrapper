@@ -272,27 +272,41 @@ int main(int argc, char *argv[])
 #endif
 
     char linkbuf[PATH_MAX];
-    char targetbuf[PATH_MAX];
     if (sym) {
         struct passwd *pwinfo;
         struct stat sb;
+        int written;
         if ((pwinfo = getpwuid(uid)) == NULL) {
+            drop_priv_perm(uid,gid);
             fprintf(stderr,"Error: Cannot get info for user!\n");
             return EXIT_FAILURE;
         }
-        snprintf(linkbuf,PATH_MAX,SYMLINK_BASE "/%s",pwinfo->pw_name);
+        written = snprintf(linkbuf,PATH_MAX,SYMLINK_BASE "/%s",pwinfo->pw_name);
+        if (written >= PATH_MAX) {
+            drop_priv_perm(uid,gid);
+            fprintf(stderr,"Error: link path '" SYMLINK_BASE "/%s' too long: %d!\n",pwinfo->pw_name,written);
+            return EXIT_FAILURE;
+        }
         if (mkdir_p(linkbuf,S_IRWXU | S_IRGRP | S_IXGRP | S_IROTH | S_IXOTH) < 0) {
+            drop_priv_perm(uid,gid);
             fprintf(stderr,"Error: Error creating directory %s: %s!\n",linkbuf,strerror(errno));
             return EXIT_FAILURE;
         }
         if (chown(linkbuf,uid,gid) < 0) {
+            drop_priv_perm(uid,gid);
             fprintf(stderr,"Error: Cannot chown %s: %s!\n",linkbuf,strerror(errno));
             return EXIT_FAILURE;
         }
         char *image = basename(image_name);
-        snprintf(linkbuf,PATH_MAX, SYMLINK_BASE "/%s/%s",pwinfo->pw_name,image);
+        written = snprintf(linkbuf,PATH_MAX, SYMLINK_BASE "/%s/%s",pwinfo->pw_name,image);
+        if (written >= PATH_MAX) {
+            drop_priv_perm(uid,gid);
+            fprintf(stderr,"Error: link path '" SYMLINK_BASE "/%s/%s' too long: %d!\n",pwinfo->pw_name,image,written);
+            return EXIT_FAILURE;
+        }
         if (unlink(linkbuf) == -1) {
             if (errno != ENOENT) {
+                drop_priv_perm(uid,gid);
                 fprintf(stderr,"Error: Cannot remove %s!\n",linkbuf);
                 return EXIT_FAILURE;
             }
@@ -307,7 +321,12 @@ int main(int argc, char *argv[])
 
     if (sym) {
         char targetbuf[PATH_MAX];
-        snprintf(targetbuf,PATH_MAX,"/proc/%d/root" MOUNTPOINT, getpid());
+        pid_t pid = getpid();
+        int written = snprintf(targetbuf,PATH_MAX,"/proc/%lld/root" MOUNTPOINT, (long long int)pid);
+        if (written >= PATH_MAX) {
+            fprintf(stderr,"Error: link target path '/proc/%lld/root" MOUNTPOINT "' too long: %d!\n",(long long int)pid,written);
+            return EXIT_FAILURE;
+        }
         if (symlink(targetbuf,linkbuf) == -1) {
             if (errno != EEXIST) {
                 fprintf(stderr,"Error: Cannot create symlink %s -> %s: %s\n",linkbuf,targetbuf,strerror(errno));
