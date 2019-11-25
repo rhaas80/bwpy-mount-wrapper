@@ -297,13 +297,6 @@ int main(int argc, char *argv[])
                 return EXIT_FAILURE;
             }
         }
-        snprintf(targetbuf,PATH_MAX,"/proc/%d/root" MOUNTPOINT,getpid());
-        if (symlink(targetbuf,linkbuf) == -1) {
-            if (errno != EEXIST) {
-                fprintf(stderr,"Error: Cannot create symlink %s -> %s: %s\n",linkbuf,targetbuf,strerror(errno));
-                return EXIT_FAILURE;
-            }
-        }
     }
 
     drop_priv_perm(uid,gid);
@@ -311,6 +304,17 @@ int main(int argc, char *argv[])
     RESTORE_ENV("LD_LIBRARY_PATH");
     RESTORE_ENV("LD_PRELOAD");
     RESTORE_ENV("NLSPATH");
+
+    if (sym) {
+        char targetbuf[PATH_MAX];
+        snprintf(targetbuf,PATH_MAX,"/proc/%d/root" MOUNTPOINT, getpid());
+        if (symlink(targetbuf,linkbuf) == -1) {
+            if (errno != EEXIST) {
+                fprintf(stderr,"Error: Cannot create symlink %s -> %s: %s\n",linkbuf,targetbuf,strerror(errno));
+                return EXIT_FAILURE;
+            }
+        }
+    }
 
     execvp(program,program_args);
     // execvp only returns on error
